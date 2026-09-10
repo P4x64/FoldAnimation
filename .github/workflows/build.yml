@@ -19,9 +19,9 @@ jobs:
       - name: Accept Android SDK Licenses
         run: yes | sdkmanager --licenses || true
 
-      - name: Generate Source Code
+      - name: Generate Custom Fold Launcher
         run: |
-          mkdir -p app/src/main/java/com/example/foldanimation
+          mkdir -p app/src/main/java/com/example/foldlauncher
 
           cat << 'EOF' > settings.gradle.kts
           pluginManagement {
@@ -38,7 +38,7 @@ jobs:
                   mavenCentral()
               }
           }
-          rootProject.name = "FoldAnimation"
+          rootProject.name = "FoldLauncher"
           include(":app")
           EOF
 
@@ -55,14 +55,14 @@ jobs:
               id("org.jetbrains.kotlin.android")
           }
           android {
-              namespace = "com.example.foldanimation"
+              namespace = "com.example.foldlauncher"
               compileSdk = 34
               defaultConfig {
-                  applicationId = "com.example.foldanimation"
+                  applicationId = "com.example.foldlauncher"
                   minSdk = 31
                   targetSdk = 34
-                  versionCode = 5
-                  versionName = "3.0"
+                  versionCode = 7
+                  versionName = "5.0"
               }
               buildTypes {
                   release {
@@ -82,18 +82,26 @@ jobs:
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
               <application
                   android:allowBackup="true"
                   android:icon="@android:drawable/sym_def_app_icon"
-                  android:label="Fold 8 Concept"
+                  android:label="Fold 8 Launcher"
                   android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+
                   <activity
-                      android:name=".MainActivity"
+                      android:name=".LauncherActivity"
                       android:exported="true"
+                      android:launchMode="singleTask"
+                      android:stateNotNeeded="true"
                       android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density"
                       android:resizeableActivity="true">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.HOME" />
+                          <category android:name="android.intent.category.DEFAULT" />
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
@@ -101,370 +109,494 @@ jobs:
           </manifest>
           EOF
 
-          cat << 'EOF' > app/src/main/java/com/example/foldanimation/MainActivity.kt
-          package com.example.foldanimation
+          cat << 'EOF' > app/src/main/java/com/example/foldlauncher/LauncherActivity.kt
+          package com.example.foldlauncher
 
           import android.app.Activity
+          import android.app.WallpaperManager
           import android.content.Context
+          import android.content.Intent
+          import android.content.pm.ResolveInfo
           import android.content.res.Configuration
-          import android.graphics.*
+          import android.graphics.Color
+          import android.graphics.RenderEffect
+          import android.graphics.Shader
+          import android.graphics.drawable.Drawable
           import android.graphics.drawable.GradientDrawable
           import android.hardware.Sensor
           import android.hardware.SensorEvent
           import android.hardware.SensorEventListener
           import android.hardware.SensorManager
+          import android.os.BatteryManager
           import android.os.Build
           import android.os.Bundle
           import android.view.Gravity
           import android.view.View
           import android.view.WindowManager
           import android.widget.*
+          import java.text.SimpleDateFormat
+          import java.util.*
 
-          class WallpaperView(context: Context, private val isUnfolded: Boolean) : View(context) {
-              private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-              override fun onDraw(canvas: Canvas) {
-                  super.onDraw(canvas)
-                  val w = width.toFloat()
-                  val h = height.toFloat()
-                  paint.shader = LinearGradient(0f, 0f, 0f, h * 0.65f, intArrayOf(0xFF1E3C58.toInt(), 0xFF436582.toInt(), 0xFF9FB1C1.toInt()), null, Shader.TileMode.CLAMP)
-                  canvas.drawRect(0f, 0f, w, h * 0.65f, paint)
-                  paint.shader = LinearGradient(0f, h * 0.55f, 0f, h, intArrayOf(0xFF163248.toInt(), 0xFF142431.toInt()), null, Shader.TileMode.CLAMP)
-                  canvas.drawRect(0f, h * 0.55f, w, h, paint)
+          data class InstalledApp(val name: String, val icon: Drawable, val pkgName: String)
 
-                  val cx = if (isUnfolded) w * 0.68f else w * 0.5f
-                  val path = Path().apply {
-                      moveTo(cx - w * 0.35f, h)
-                      cubicTo(cx - w * 0.2f, h * 0.72f, cx - w * 0.1f, h * 0.62f, cx, h * 0.60f)
-                      cubicTo(cx + w * 0.15f, h * 0.61f, cx + w * 0.28f, h * 0.75f, cx + w * 0.40f, h)
-                      close()
-                  }
-                  paint.shader = LinearGradient(0f, h * 0.6f, 0f, h, intArrayOf(0xFF5A6265.toInt(), 0xFF1E2224.toInt()), null, Shader.TileMode.CLAMP)
-                  canvas.drawPath(path, paint)
+          class LauncherActivity : Activity(), SensorEventListener {
 
-                  paint.shader = null
-                  paint.color = 0xFF191F22.toInt()
-                  paint.style = Paint.Style.STROKE
-                  paint.strokeWidth = if (isUnfolded) 16f else 12f
-                  paint.strokeCap = Paint.Cap.ROUND
-                  val tx = cx + (if (isUnfolded) 18f else 10f)
-                  val ty = h * 0.60f
-                  val tPath = Path().apply {
-                      moveTo(tx, ty)
-                      quadTo(tx - 20f, ty - 120f, tx - 8f, ty - 220f)
-                      quadTo(tx + 30f, ty - 280f, tx + 15f, ty - 350f)
-                  }
-                  canvas.drawPath(tPath, paint)
-                  paint.strokeWidth = 8f
-                  canvas.drawLine(tx - 8f, ty - 220f, tx - 70f, ty - 270f, paint)
-                  canvas.drawLine(tx + 12f, ty - 250f, tx + 80f, ty - 290f, paint)
-                  paint.style = Paint.Style.FILL
-                  paint.color = 0xFF18332A.toInt()
-                  canvas.drawOval(tx - 70f, ty - 370f, tx + 70f, ty - 320f, paint)
-                  canvas.drawOval(tx - 110f, ty - 310f, tx - 20f, ty - 270f, paint)
-                  canvas.drawOval(tx + 30f, ty - 320f, tx + 120f, ty - 280f, paint)
-              }
-          }
+              private lateinit var sensorManager: SensorManager
+              private var hingeSensor: Sensor? = null
+              private lateinit var rootContainer: FrameLayout
 
-          class MainActivity : Activity(), SensorEventListener {
-              private lateinit var sm: SensorManager
-              private var hinge: Sensor? = null
-              private lateinit var root: FrameLayout
               private var leftPanel: LinearLayout? = null
               private var rightPanel: LinearLayout? = null
-              private var outerLayer: LinearLayout? = null
+              private var outerContainer: LinearLayout? = null
+
+              private val appList = mutableListOf<InstalledApp>()
               private var isUnfolded = false
-              private var curAngle = 180f
+              private var currentAngle = 180f
+
+              private fun dp(v: Float): Int = (v * resources.displayMetrics.density).toInt()
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
-                  hideUI()
-                  sm = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-                  hinge = sm.getDefaultSensor(Sensor.TYPE_HINGE_ANGLE)
-                  root = FrameLayout(this)
-                  setContentView(root)
-                  checkScreen(resources.configuration)
-                  rebuildUI()
+                  hideSystemUI()
+
+                  sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+                  hingeSensor = sensorManager.getDefaultSensor(Sensor.TYPE_HINGE_ANGLE)
+
+                  rootContainer = FrameLayout(this)
+                  setContentView(rootContainer)
+
+                  loadRealApps()
+                  checkScreenState(resources.configuration)
+                  buildDesktop()
               }
 
               override fun onResume() {
                   super.onResume()
-                  hideUI()
-                  hinge?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST) }
+                  hideSystemUI()
+                  hingeSensor?.let {
+                      sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST)
+                  }
               }
 
               override fun onPause() {
                   super.onPause()
-                  sm.unregisterListener(this)
+                  sensorManager.unregisterListener(this)
               }
 
               override fun onConfigurationChanged(newConfig: Configuration) {
                   super.onConfigurationChanged(newConfig)
-                  hideUI()
-                  checkScreen(newConfig)
-                  rebuildUI()
-                  applyBlur(curAngle)
+                  hideSystemUI()
+                  checkScreenState(newConfig)
+                  buildDesktop()
+                  applyPhysicBlur(currentAngle)
               }
 
-              private fun checkScreen(c: Configuration) {
-                  isUnfolded = c.smallestScreenWidthDp >= 600
+              private fun checkScreenState(config: Configuration) {
+                  isUnfolded = config.smallestScreenWidthDp >= 600
               }
 
-              private fun hideUI() {
-                  window.setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
-                  window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_FULLSCREEN)
+              private fun hideSystemUI() {
+                  window.setFlags(
+                      WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                      WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                  )
+                  window.decorView.systemUiVisibility = (
+                          View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                                  or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                                  or View.SYSTEM_UI_FLAG_FULLSCREEN
+                                  or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                                  or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                                  or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                          )
               }
 
-              override fun onSensorChanged(e: SensorEvent?) {
-                  e?.let {
-                      curAngle = it.values[0]
-                      applyBlur(curAngle)
+              // 读取手机已安装的所有真实 App
+              private fun loadRealApps() {
+                  appList.clear()
+                  val pm = packageManager
+                  val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
+                      addCategory(Intent.CATEGORY_LAUNCHER)
+                  }
+                  val resolved: List<ResolveInfo> = pm.queryIntentActivities(mainIntent, 0)
+                  for (info in resolved) {
+                      if (info.activityInfo.packageName == packageName) continue
+                      val label = info.loadLabel(pm).toString()
+                      val icon = info.loadIcon(pm)
+                      appList.add(InstalledApp(label, icon, info.activityInfo.packageName))
                   }
               }
 
-              override fun onAccuracyChanged(s: Sensor?, a: Int) {}
+              override fun onSensorChanged(event: SensorEvent?) {
+                  event?.let {
+                      currentAngle = it.values[0]
+                      applyPhysicBlur(currentAngle)
+                  }
+              }
 
-              private fun applyBlur(angle: Float) {
+              override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
+              // 像素级复刻视频 2：物理开合非对称对焦引擎
+              private fun applyPhysicBlur(angle: Float) {
                   if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+
                   if (isUnfolded) {
+                      // 内屏模式：左半扇面在 110°~175° 从大景深失焦平滑合焦，右侧锚点保持清晰
                       val progress = ((angle - 110f) / (175f - 110f)).coerceIn(0f, 1f)
-                      val blur = (1f - progress) * 80f
-                      leftPanel?.let { p ->
-                          p.alpha = 0.6f + (0.4f * progress)
-                          p.scaleX = 0.94f + (0.06f * progress)
-                          p.scaleY = 0.94f + (0.06f * progress)
-                          p.translationX = (1f - progress) * -40f
-                          p.setRenderEffect(if (blur > 1.5f) RenderEffect.createBlurEffect(blur, blur, Shader.TileMode.CLAMP) else null)
+                      val blurRadius = (1f - progress) * 85f
+
+                      leftPanel?.let { panel ->
+                          panel.alpha = 0.65f + (0.35f * progress)
+                          panel.scaleX = 0.94f + (0.06f * progress)
+                          panel.scaleY = 0.94f + (0.06f * progress)
+                          panel.translationX = (1f - progress) * -dp(30f)
+
+                          if (blurRadius > 1.5f) {
+                              panel.setRenderEffect(RenderEffect.createBlurEffect(blurRadius, blurRadius, Shader.TileMode.CLAMP))
+                          } else {
+                              panel.setRenderEffect(null)
+                          }
                       }
                       rightPanel?.setRenderEffect(null)
                   } else {
+                      // 外屏模式：折叠中动态失焦，合紧到 0° 时瞬间锐利合焦
                       val progress = ((angle - 3f) / (35f - 3f)).coerceIn(0f, 1f)
-                      val blur = progress * 75f
-                      outerLayer?.setRenderEffect(if (blur > 1.5f) RenderEffect.createBlurEffect(blur, blur, Shader.TileMode.CLAMP) else null)
-                  }
-              }
+                      val blurRadius = progress * 75f
 
-              private fun rebuildUI() {
-                  root.removeAllViews()
-                  root.addView(WallpaperView(this, isUnfolded))
-                  if (isUnfolded) buildInner() else buildOuter()
-                  addClock()
-              }
-
-              private fun addClock() {
-                  val tv = TextView(this).apply {
-                      text = "8:27"
-                      textSize = 14f
-                      setTextColor(0xDDFFFFFF.toInt())
-                      paint.isFakeBoldText = true
-                      layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT).apply {
-                          topMargin = 40
-                          leftMargin = 50
+                      outerContainer?.let { container ->
+                          if (blurRadius > 1.5f) {
+                              container.setRenderEffect(RenderEffect.createBlurEffect(blurRadius, blurRadius, Shader.TileMode.CLAMP))
+                          } else {
+                              container.setRenderEffect(null)
+                          }
                       }
                   }
-                  root.addView(tv)
               }
 
-              private fun buildInner() {
-                  val hBox = LinearLayout(this).apply {
+              private fun buildDesktop() {
+                  rootContainer.removeAllViews()
+
+                  // 1. 壁纸层：直接获取你手机当前设置的系统壁纸
+                  val wallpaperView = ImageView(this).apply {
+                      layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+                      scaleType = ImageView.ScaleType.CENTER_CROP
+                      try {
+                          val wm = WallpaperManager.getInstance(this@LauncherActivity)
+                          setImageDrawable(wm.drawable)
+                      } catch (e: Exception) {
+                          setBackgroundColor(0xFF1E222A.toInt())
+                      }
+                  }
+                  rootContainer.addView(wallpaperView)
+
+                  // 2. 桌面内容层
+                  if (isUnfolded) {
+                      buildInnerDesktop()
+                  } else {
+                      buildOuterDesktop()
+                  }
+
+                  // 3. 顶部微型状态时间
+                  addStatusBarClock()
+              }
+
+              // 内屏：非对称双屏结构（左侧你的应用与主卡片，右侧微型快捷卡片）
+              private fun buildInnerDesktop() {
+                  val mainBox = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
-                      setPadding(60, 110, 60, 40)
+                      setPadding(dp(20f), dp(40f), dp(20f), dp(85f))
                   }
 
+                  // === 左扇面（承载你的应用网格与动态虚化） ===
                   leftPanel = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.0f).apply { marginEnd = 30 }
-                      val topW = LinearLayout(this@MainActivity).apply {
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.0f).apply {
+                          marginEnd = dp(15f)
+                      }
+
+                      // 顶部精致小组件排（视频2同款比例）
+                      val widgetRow = LinearLayout(this@LauncherActivity).apply {
                           orientation = LinearLayout.HORIZONTAL
                           layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                          addView(createBrief(true))
-                          addView(createWeather(true))
+                          addView(createBriefWidget())
+                          addView(createDateWidget())
                       }
-                      addView(topW)
-                      addView(createGrid(4, true))
-                      addView(View(this@MainActivity).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f) })
+                      addView(widgetRow)
+
+                      // 承载你真实 App 的滚动网格
+                      val scroll = ScrollView(this@LauncherActivity).apply {
+                          isVerticalScrollBarEnabled = false
+                          layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f).apply {
+                              topMargin = dp(15f)
+                          }
+                      }
+                      scroll.addView(createAppGrid(4, 16))
+                      addView(scroll)
                   }
 
+                  // === 右侧锚点（保持清晰，可展示天气与系统状态卡片） ===
                   rightPanel = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.0f).apply { marginStart = 30 }
-                      val topR = LinearLayout(this@MainActivity).apply {
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.0f).apply {
+                          marginStart = dp(15f)
+                      }
+
+                      val statusRow = LinearLayout(this@LauncherActivity).apply {
                           orientation = LinearLayout.HORIZONTAL
                           layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                          val folders = LinearLayout(this@MainActivity).apply {
-                              orientation = LinearLayout.HORIZONTAL
-                              layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f)
-                              addView(createApp("OpenCode", 0xFFFFFFFF.toInt(), false))
-                              addView(createApp("My Files", 0xFFFFA000.toInt(), false))
-                          }
-                          addView(folders)
-                          addView(createStatus())
+                          addView(createStatusWidget())
                       }
-                      addView(topR)
-                      addView(View(this@MainActivity).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f) })
+                      addView(statusRow)
+
+                      // 右侧剩余区域留空展示壁纸主体
+                      addView(View(this@LauncherActivity).apply {
+                          layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f)
+                      })
                   }
 
-                  hBox.addView(leftPanel)
-                  hBox.addView(rightPanel)
-                  root.addView(hBox)
+                  mainBox.addView(leftPanel)
+                  mainBox.addView(rightPanel)
+                  rootContainer.addView(mainBox)
 
+                  // 底部毛玻璃 Dock（装载你的常用 App）
                   val dockWrap = FrameLayout(this).apply {
                       layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT).apply {
                           gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                          bottomMargin = 50
+                          bottomMargin = dp(18f)
                       }
-                      addView(createDock(6))
                   }
-                  root.addView(dockWrap)
+                  dockWrap.addView(createDockBar(6))
+                  rootContainer.addView(dockWrap)
               }
 
-              private fun buildOuter() {
-                  outerLayer = LinearLayout(this).apply {
+              // 外屏：单列紧凑桌面
+              private fun buildOuterDesktop() {
+                  outerContainer = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
-                      setPadding(45, 110, 45, 45)
-                      val topW = LinearLayout(this@MainActivity).apply {
+                      setPadding(dp(16f), dp(40f), dp(16f), dp(20f))
+
+                      val widgetRow = LinearLayout(this@LauncherActivity).apply {
                           orientation = LinearLayout.HORIZONTAL
                           layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                          addView(createBrief(false))
-                          addView(createWeather(false))
+                          addView(createBriefWidget())
+                          addView(createDateWidget())
                       }
-                      addView(topW)
-                      addView(createGrid(4, false))
-                      addView(View(this@MainActivity).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f) })
-                      addView(createDock(4))
+                      addView(widgetRow)
+
+                      val scroll = ScrollView(this@LauncherActivity).apply {
+                          isVerticalScrollBarEnabled = false
+                          layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f).apply {
+                              topMargin = dp(15f)
+                          }
+                      }
+                      scroll.addView(createAppGrid(4, 12))
+                      addView(scroll)
+
+                      addView(createDockBar(4))
                   }
-                  root.addView(outerLayer)
+                  rootContainer.addView(outerContainer)
               }
 
-              private fun createBrief(isInner: Boolean): View {
-                  val card = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      layoutParams = LinearLayout.LayoutParams(0, if (isInner) 250 else 230, 1.0f).apply { marginEnd = 16 }
-                      setPadding(30, 30, 30, 30)
-                      background = GradientDrawable().apply { cornerRadius = 45f; setColor(0xEE102434.toInt()) }
-                  }
-                  val bar = View(this).apply {
-                      layoutParams = LinearLayout.LayoutParams(16, 32).apply { bottomMargin = 22 }
-                      background = GradientDrawable().apply { cornerRadius = 8f; setColor(0xFF00E5FF.toInt()) }
-                  }
-                  val t = TextView(this).apply { text = "Now brief"; textSize = 16f; setTextColor(0xFFFFFFFF.toInt()); paint.isFakeBoldText = true }
-                  val s = TextView(this).apply { text = "Get today's\nhighlights"; textSize = 12f; setTextColor(0x99FFFFFF.toInt()); setPadding(0, 8, 0, 0) }
-                  card.addView(bar)
-                  card.addView(t)
-                  card.addView(s)
-                  return card
-              }
-
-              private fun createWeather(isInner: Boolean): View {
-                  val card = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      layoutParams = LinearLayout.LayoutParams(0, if (isInner) 250 else 230, 1.0f).apply { marginStart = 16 }
-                      setPadding(30, 30, 30, 30)
-                      background = GradientDrawable().apply { cornerRadius = 45f; setColor(0xEE163B5C.toInt()) }
-                  }
-                  val dot = View(this).apply {
-                      layoutParams = LinearLayout.LayoutParams(26, 26).apply { bottomMargin = 20 }
-                      background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xFFFFCA28.toInt()) }
-                  }
-                  val t = TextView(this).apply { text = "91°"; textSize = 20f; setTextColor(0xFFFFFFFF.toInt()); paint.isFakeBoldText = true }
-                  val s = TextView(this).apply { text = "Wed, 9 Sep\nSunny"; textSize = 12f; setTextColor(0xAAFFFFFF.toInt()); setPadding(0, 6, 0, 0) }
-                  card.addView(dot)
-                  card.addView(t)
-                  card.addView(s)
-                  return card
-              }
-
-              private fun createStatus(): View {
-                  val card = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      layoutParams = LinearLayout.LayoutParams(0, 250, 1.0f).apply { marginStart = 20 }
-                      setPadding(30, 30, 30, 30)
-                      background = GradientDrawable().apply { cornerRadius = 45f; setColor(0xEE1E242C.toInt()) }
-                  }
-                  val dot = View(this).apply {
-                      layoutParams = LinearLayout.LayoutParams(24, 24).apply { bottomMargin = 20 }
-                      background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xFFBA68C8.toInt()) }
-                  }
-                  val t = TextView(this).apply { text = "Status"; textSize = 16f; setTextColor(0xFFFFFFFF.toInt()); paint.isFakeBoldText = true }
-                  val s = TextView(this).apply { text = "What's your status?"; textSize = 12f; setTextColor(0x99FFFFFF.toInt()); setPadding(0, 8, 0, 0) }
-                  card.addView(dot)
-                  card.addView(t)
-                  card.addView(s)
-                  return card
-              }
-
-              private fun createGrid(cols: Int, isInner: Boolean): View {
+              // 生成应用网格（显示真实图标与名称，点击可打开）
+              private fun createAppGrid(cols: Int, maxCount: Int): View {
                   val grid = GridLayout(this).apply {
                       columnCount = cols
-                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = 50 }
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
                   }
-                  val apps = listOf(
-                      Pair("Firefox", 0xFFE65100.toInt()),
-                      Pair("Camera", 0xFF212121.toInt()),
-                      Pair("Photos", 0xFFFFFFFF.toInt()),
-                      Pair("Settings", 0xFF455A64.toInt()),
-                      Pair("Music", 0xFFFA2D48.toInt()),
-                      Pair("Notes", 0xFFFFB300.toInt()),
-                      Pair("Clock", 0xFF1E88E5.toInt()),
-                      Pair("Health", 0xFF00B0FF.toInt())
-                  )
-                  val count = if (isInner) 6 else 8
-                  for (i in 0 until count) {
-                      val app = apps[i % apps.size]
-                      val v = createApp(app.first, app.second, app.first == "Settings")
-                      v.layoutParams = GridLayout.LayoutParams().apply {
-                          width = 0
-                          columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
-                          bottomMargin = 35
+
+                  val displayList = appList.take(maxCount)
+                  for (app in displayList) {
+                      val item = LinearLayout(this).apply {
+                          orientation = LinearLayout.VERTICAL
+                          gravity = Gravity.CENTER
+                          layoutParams = GridLayout.LayoutParams().apply {
+                              width = 0
+                              columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
+                              bottomMargin = dp(18f)
+                          }
+                          setOnClickListener {
+                              val launchIntent = packageManager.getLaunchIntentForPackage(app.pkgName)
+                              launchIntent?.let { startActivity(it) }
+                          }
                       }
-                      grid.addView(v)
+
+                      val iconView = ImageView(this).apply {
+                          layoutParams = LinearLayout.LayoutParams(dp(54f), dp(54f))
+                          setImageDrawable(app.icon)
+                      }
+
+                      val labelView = TextView(this).apply {
+                          text = app.name
+                          textSize = 11f
+                          setTextColor(0xEEFFFFFF.toInt())
+                          maxLines = 1
+                          setPadding(0, dp(4f), 0, 0)
+                      }
+
+                      item.addView(iconView)
+                      item.addView(labelView)
+                      grid.addView(item)
                   }
                   return grid
               }
 
-              private fun createApp(name: String, bg: Int, hasBadge: Boolean): View {
-                  val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
-                  val wrap = FrameLayout(this).apply { layoutParams = LinearLayout.LayoutParams(125, 125) }
-                  val sq = View(this).apply {
-                      layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
-                      background = GradientDrawable().apply { cornerRadius = 38f; setColor(bg) }
-                  }
-                  wrap.addView(sq)
-                  if (hasBadge) {
-                      val badge = TextView(this).apply {
-                          text = "1"
-                          textSize = 10f
-                          setTextColor(Color.WHITE)
-                          gravity = Gravity.CENTER
-                          background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xFFF44336.toInt()) }
-                          layoutParams = FrameLayout.LayoutParams(38, 38).apply { gravity = Gravity.TOP or Gravity.END; topMargin = -6; rightMargin = -6 }
+              private fun createDockBar(count: Int): View {
+                  val dockWrap = LinearLayout(this).apply {
+                      gravity = Gravity.CENTER
+                      layoutParams = LinearLayout.LayoutParams(
+                          if (isUnfolded) dp(320f) else LinearLayout.LayoutParams.MATCH_PARENT,
+                          dp(68f)
+                      )
+                      background = GradientDrawable().apply {
+                          cornerRadius = dp(34f).toFloat()
+                          setColor(0x40FFFFFF.toInt())
                       }
-                      wrap.addView(badge)
                   }
-                  val lbl = TextView(this).apply { text = name; textSize = 11f; setTextColor(0xEEFFFFFF.toInt()); setPadding(0, 10, 0, 0) }
-                  layout.addView(wrap)
-                  layout.addView(lbl)
-                  return layout
+
+                  val dockApps = appList.take(count)
+                  for (app in dockApps) {
+                      val img = ImageView(this).apply {
+                          layoutParams = LinearLayout.LayoutParams(dp(48f), dp(48f)).apply {
+                              leftMargin = dp(8f)
+                              rightMargin = dp(8f)
+                          }
+                          setImageDrawable(app.icon)
+                          setOnClickListener {
+                              val launchIntent = packageManager.getLaunchIntentForPackage(app.pkgName)
+                              launchIntent?.let { startActivity(it) }
+                          }
+                      }
+                      dockWrap.addView(img)
+                  }
+                  return dockWrap
               }
 
-              private fun createDock(count: Int): View {
-                  val dock = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
-                      gravity = Gravity.CENTER
-                      layoutParams = LinearLayout.LayoutParams(if (isUnfolded) 760 else LinearLayout.LayoutParams.MATCH_PARENT, 170)
-                      setPadding(30, 0, 30, 0)
-                      background = GradientDrawable().apply { cornerRadius = 85f; setColor(0x40FFFFFF.toInt()) }
-                  }
-                  val colors = intArrayOf(0xFF4CAF50.toInt(), 0xFF1976D2.toInt(), 0xFFFF9800.toInt(), 0xFFE91E63.toInt(), 0xFF9C27B0.toInt(), 0xFF00BCD4.toInt())
-                  for (i in 0 until count) {
-                      val itm = View(this).apply {
-                          layoutParams = LinearLayout.LayoutParams(105, 105).apply { leftMargin = 16; rightMargin = 16 }
-                          background = GradientDrawable().apply { cornerRadius = 34f; setColor(colors[i % colors.size]) }
+              // 视频2同款精致卡片 1：Now brief（带青色胶囊竖条）
+              private fun createBriefWidget(): View {
+                  val card = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(0, dp(100f), 1.0f).apply {
+                          marginEnd = dp(8f)
                       }
-                      dock.addView(itm)
+                      setPadding(dp(14f), dp(14f), dp(14f), dp(14f))
+                      background = GradientDrawable().apply {
+                          cornerRadius = dp(24f).toFloat()
+                          setColor(0xCC102434.toInt())
+                      }
                   }
-                  return dock
+                  val bar = View(this).apply {
+                      layoutParams = LinearLayout.LayoutParams(dp(6f), dp(14f)).apply { bottomMargin = dp(8f) }
+                      background = GradientDrawable().apply {
+                          cornerRadius = dp(3f).toFloat()
+                          setColor(0xFF00E5FF.toInt())
+                      }
+                  }
+                  val title = TextView(this).apply {
+                      text = "Now brief"
+                      textSize = 15f
+                      setTextColor(Color.WHITE)
+                      paint.isFakeBoldText = true
+                  }
+                  val sub = TextView(this).apply {
+                      text = "Get today's highlights"
+                      textSize = 11f
+                      setTextColor(0x99FFFFFF.toInt())
+                  }
+                  card.addView(bar)
+                  card.addView(title)
+                  card.addView(sub)
+                  return card
+              }
+
+              // 视频2同款精致卡片 2：日期/电量（带黄色太阳圆点）
+              private fun createDateWidget(): View {
+                  val card = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(0, dp(100f), 1.0f).apply {
+                          marginStart = dp(8f)
+                      }
+                      setPadding(dp(14f), dp(14f), dp(14f), dp(14f))
+                      background = GradientDrawable().apply {
+                          cornerRadius = dp(24f).toFloat()
+                          setColor(0xCC163B5C.toInt())
+                      }
+                  }
+                  val dot = View(this).apply {
+                      layoutParams = LinearLayout.LayoutParams(dp(10f), dp(10f)).apply { bottomMargin = dp(8f) }
+                      background = GradientDrawable().apply {
+                          shape = GradientDrawable.OVAL
+                          setColor(0xFFFFCA28.toInt())
+                      }
+                  }
+                  val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+                  val battery = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                  val t = TextView(this).apply {
+                      text = "$battery%"
+                      textSize = 16f
+                      setTextColor(Color.WHITE)
+                      paint.isFakeBoldText = true
+                  }
+                  val dateStr = SimpleDateFormat("EEE, d MMM", Locale.ENGLISH).format(Date())
+                  val s = TextView(this).apply {
+                      text = dateStr
+                      textSize = 11f
+                      setTextColor(0xAAFFFFFF.toInt())
+                  }
+                  card.addView(dot)
+                  card.addView(t)
+                  card.addView(s)
+                  return card
+              }
+
+              // 视频2同款精致卡片 3：Status 卡片
+              private fun createStatusWidget(): View {
+                  val card = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(0, dp(100f), 1.0f)
+                      setPadding(dp(14f), dp(14f), dp(14f), dp(14f))
+                      background = GradientDrawable().apply {
+                          cornerRadius = dp(24f).toFloat()
+                          setColor(0xCC1E242C.toInt())
+                      }
+                  }
+                  val dot = View(this).apply {
+                      layoutParams = LinearLayout.LayoutParams(dp(10f), dp(10f)).apply { bottomMargin = dp(8f) }
+                      background = GradientDrawable().apply {
+                          shape = GradientDrawable.OVAL
+                          setColor(0xFFBA68C8.toInt())
+                      }
+                  }
+                  val t = TextView(this).apply {
+                      text = "Status"
+                      textSize = 15f
+                      setTextColor(Color.WHITE)
+                      paint.isFakeBoldText = true
+                  }
+                  val s = TextView(this).apply {
+                      text = "All systems normal"
+                      textSize = 11f
+                      setTextColor(0x99FFFFFF.toInt())
+                  }
+                  card.addView(dot)
+                  card.addView(t)
+                  card.addView(s)
+                  return card
+              }
+
+              private fun addStatusBarClock() {
+                  val timeStr = SimpleDateFormat("H:mm", Locale.getDefault()).format(Date())
+                  val tv = TextView(this).apply {
+                      text = timeStr
+                      textSize = 13f
+                      setTextColor(0xCCFFFFFF.toInt())
+                      paint.isFakeBoldText = true
+                      layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT).apply {
+                          topMargin = dp(14f)
+                          leftMargin = dp(24f)
+                      }
+                  }
+                  rootContainer.addView(tv)
               }
           }
           EOF
@@ -477,5 +609,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Fold8-Concept-APK
+          name: Fold8-MyDesktop-APK
           path: app/build/outputs/apk/debug/*.apk
