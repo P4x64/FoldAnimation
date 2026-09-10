@@ -47,8 +47,8 @@ jobs:
                   applicationId = "com.example.foldanimation"
                   minSdk = 31
                   targetSdk = 33
-                  versionCode = 1
-                  versionName = "1.0"
+                  versionCode = 2
+                  versionName = "1.1"
               }
               buildTypes {
                   release {
@@ -68,7 +68,6 @@ jobs:
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
               <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -76,9 +75,8 @@ jobs:
               <application
                   android:allowBackup="true"
                   android:icon="@android:drawable/sym_def_app_icon"
-                  android:label="Fold 全局展开动画"
+                  android:label="Fold展开动画"
                   android:theme="@android:style/Theme.DeviceDefault.Light">
-                  
                   <activity
                       android:name=".MainActivity"
                       android:exported="true">
@@ -87,7 +85,6 @@ jobs:
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
-
                   <service
                       android:name=".FoldBlurService"
                       android:exported="false" />
@@ -110,33 +107,35 @@ jobs:
           import android.widget.Toast
 
           class MainActivity : Activity() {
-
-              private lateinit var statusText: TextView
-
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
 
                   val layout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      setPadding(60, 120, 60, 60)
+                      setPadding(60, 100, 60, 60)
                   }
 
-                  val title = TextView(this).apply {
-                      text = "Fold 全局开合物理虚化"
-                      textSize = 22f
-                      setPadding(0, 0, 0, 30)
-                  }
-
-                  statusText = TextView(this).apply {
-                      text = "状态：未运行\n\n【使用说明】：\n1. 点击下方按钮授予【悬浮窗/显示在上层】权限\n2. 启动服务后直接退回到手机桌面\n3. 像视频2一样慢慢开合折叠屏，系统桌面及壁纸会随开合角度实时产生物理景深虚化与合焦。"
-                      textSize = 15f
-                      setPadding(0, 0, 0, 60)
+                  val info = TextView(this).apply {
+                      text = "【Fold 动画服务】\n\n1. 授予悬浮窗权限\n2. 点击启动后返回桌面\n3. 观察右上角是否有角度数值跳动"
+                      textSize = 16f
+                      setPadding(0, 0, 0, 40)
                   }
 
                   val startBtn = Button(this).apply {
-                      text = "开启全局后台虚化"
+                      text = "启动服务"
                       setOnClickListener {
-                          checkPermissionAndStart()
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this@MainActivity)) {
+                              val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+                              startActivity(intent)
+                              return@setOnClickListener
+                          }
+                          val serviceIntent = Intent(this@MainActivity, FoldBlurService::class.java)
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                              startForegroundService(serviceIntent)
+                          } else {
+                              startService(serviceIntent)
+                          }
+                          Toast.makeText(this@MainActivity, "服务已启动，按Home回桌面查看", Toast.LENGTH_SHORT).show()
                       }
                   }
 
@@ -144,40 +143,14 @@ jobs:
                       text = "停止服务"
                       setOnClickListener {
                           stopService(Intent(this@MainActivity, FoldBlurService::class.java))
-                          statusText.text = "状态：服务已停止"
                           Toast.makeText(this@MainActivity, "服务已停止", Toast.LENGTH_SHORT).show()
                       }
                   }
 
-                  layout.addView(title)
-                  layout.addView(statusText)
+                  layout.addView(info)
                   layout.addView(startBtn)
                   layout.addView(stopBtn)
-
                   setContentView(layout)
-              }
-
-              private fun checkPermissionAndStart() {
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                      if (!Settings.canDrawOverlays(this)) {
-                          Toast.makeText(this, "请先授予【显示在其他应用上层】权限", Toast.LENGTH_LONG).show()
-                          val intent = Intent(
-                              Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                              Uri.parse("package:$packageName")
-                          )
-                          startActivity(intent)
-                          return
-                      }
-                  }
-
-                  val serviceIntent = Intent(this, FoldBlurService::class.java)
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      startForegroundService(serviceIntent)
-                  } else {
-                      startService(serviceIntent)
-                  }
-                  statusText.text = "状态：后台运行中！\n\n现在请直接按 Home 键回到手机桌面，体验折叠/展开虚化效果。"
-                  Toast.makeText(this, "服务已启动，按Home键回到桌面体验", Toast.LENGTH_SHORT).show()
               }
           }
           EOF
@@ -191,6 +164,7 @@ jobs:
           import android.app.Service
           import android.content.Context
           import android.content.Intent
+          import android.graphics.Color
           import android.graphics.PixelFormat
           import android.hardware.Sensor
           import android.hardware.SensorEvent
@@ -198,16 +172,20 @@ jobs:
           import android.hardware.SensorManager
           import android.os.Build
           import android.os.IBinder
-          import android.view.View
+          import android.view.Gravity
           import android.view.WindowManager
+          import android.widget.FrameLayout
+          import android.widget.TextView
 
           class FoldBlurService : Service(), SensorEventListener {
 
               private lateinit var windowManager: WindowManager
-              private var overlayView: View? = null
+              private var containerView: FrameLayout? = null
+              private lateinit var debugText: TextView
               private lateinit var layoutParams: WindowManager.LayoutParams
               private lateinit var sensorManager: SensorManager
               private var hingeSensor: Sensor? = null
+              private var isBlurSupported = false
 
               override fun onBind(intent: Intent?): IBinder? = null
 
@@ -219,6 +197,10 @@ jobs:
                   sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
                   hingeSensor = sensorManager.getDefaultSensor(Sensor.TYPE_HINGE_ANGLE)
 
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                      isBlurSupported = windowManager.isCrossWindowBlurEnabled
+                  }
+
                   initOverlay()
 
                   hingeSensor?.let {
@@ -227,7 +209,30 @@ jobs:
               }
 
               private fun initOverlay() {
-                  overlayView = View(this)
+                  containerView = FrameLayout(this).apply {
+                      // 关键修复：必须具备极浅的底色以强制 GPU 分配渲染 Surface
+                      setBackgroundColor(Color.argb(1, 0, 0, 0))
+                  }
+
+                  debugText = TextView(this).apply {
+                      textSize = 12f
+                      setTextColor(Color.YELLOW)
+                      setBackgroundColor(Color.argb(160, 0, 0, 0))
+                      setPadding(20, 10, 20, 10)
+                      val sensorStatus = if (hingeSensor != null) "正常" else "未找到"
+                      val blurStatus = if (isBlurSupported) "支持" else "未开启/不支持"
+                      text = "角度: 等待中 | 传感器: $sensorStatus | 系统模糊: $blurStatus"
+                  }
+
+                  val textParams = FrameLayout.LayoutParams(
+                      FrameLayout.LayoutParams.WRAP_CONTENT,
+                      FrameLayout.LayoutParams.WRAP_CONTENT
+                  ).apply {
+                      gravity = Gravity.TOP or Gravity.END
+                      topMargin = 120
+                      rightMargin = 40
+                  }
+                  containerView?.addView(debugText, textParams)
 
                   val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                       WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -235,9 +240,6 @@ jobs:
                       WindowManager.LayoutParams.TYPE_PHONE
                   }
 
-                  // FLAG_NOT_FOCUSABLE: 不抢占焦点
-                  // FLAG_NOT_TOUCHABLE: 触摸完全穿透，用户可随意滑动桌面与App
-                  // FLAG_BLUR_BEHIND: 跨窗口全局模糊（对悬浮窗背后的整个系统生效）
                   var flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                           WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
 
@@ -257,82 +259,63 @@ jobs:
                       layoutParams.blurBehindRadius = 0
                   }
 
-                  windowManager.addView(overlayView, layoutParams)
+                  windowManager.addView(containerView, layoutParams)
               }
 
               override fun onSensorChanged(event: SensorEvent?) {
                   event?.let {
                       val angle = it.values[0]
-                      updateBlurByAngle(angle)
+                      val blurStatus = if (isBlurSupported) "支持" else "未开启"
+                      debugText.text = "角度: ${angle.toInt()}° | 系统模糊: $blurStatus"
+                      applyEffectByAngle(angle)
                   }
               }
 
               override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
-              private fun updateBlurByAngle(angle: Float) {
-                  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+              private fun applyEffectByAngle(angle: Float) {
+                  // 过渡范围：120° 到 172° 之间进行景深展开
+                  val progress = ((angle - 120f) / (172f - 120f)).coerceIn(0f, 1f)
+                  val blurFactor = 1f - progress
 
-                  // 匹配视频2的开合过渡曲线：
-                  // 展开到平直 (172°~180°) 时清晰合焦 (模糊半径=0)
-                  // 在 110°~172° 开合过渡区间，角度越小虚化越深
-                  // 完全折叠闭合 (0°~15°) 时恢复清晰，确保外屏合上时不泛白
-                  val maxBlur = 75
-                  val radius: Int = when {
-                      angle >= 172f -> 0
-                      angle in 115f..172f -> {
-                          val progress = (angle - 115f) / (172f - 115f)
-                          ((1f - progress) * maxBlur).toInt()
+                  if (isBlurSupported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                      val maxBlur = 80
+                      val targetRadius = if (angle >= 175f) 0 else (blurFactor * maxBlur).toInt()
+                      if (layoutParams.blurBehindRadius != targetRadius) {
+                          layoutParams.blurBehindRadius = targetRadius
+                          containerView?.let { windowManager.updateViewLayout(it, layoutParams) }
                       }
-                      angle in 20f..115f -> maxBlur
-                      angle in 0f..20f -> {
-                          val progress = angle / 20f
-                          (progress * maxBlur).toInt()
-                      }
-                      else -> 0
-                  }
-
-                  if (layoutParams.blurBehindRadius != radius) {
-                      layoutParams.blurBehindRadius = radius
-                      overlayView?.let {
-                          windowManager.updateViewLayout(it, layoutParams)
-                      }
+                  } else {
+                      // 降级方案：如果系统强行禁用了跨窗口模糊，使用半透明磨砂遮罩动态弥补视觉变化
+                      val alpha = (blurFactor * 120).toInt()
+                      containerView?.setBackgroundColor(Color.argb(alpha, 255, 255, 255))
                   }
               }
 
               private fun startAsForeground() {
-                  val channelId = "fold_blur_service_channel"
+                  val channelId = "fold_service"
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      val channel = NotificationChannel(
-                          channelId,
-                          "Fold 展开动画服务",
-                          NotificationManager.IMPORTANCE_LOW
-                      )
-                      val manager = getSystemService(NotificationManager::class.java)
-                      manager?.createNotificationChannel(channel)
+                      val channel = NotificationChannel(channelId, "Fold Service", NotificationManager.IMPORTANCE_LOW)
+                      getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
                   }
-
                   val notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                       Notification.Builder(this, channelId)
-                          .setContentTitle("折叠动态虚化运行中")
-                          .setContentText("开合转轴即可触发全系统景深虚化")
+                          .setContentTitle("Fold 展开服务运行中")
                           .setSmallIcon(android.R.drawable.ic_dialog_info)
                           .build()
                   } else {
                       Notification.Builder(this)
-                          .setContentTitle("折叠动态虚化运行中")
+                          .setContentTitle("Fold 展开服务运行中")
                           .setSmallIcon(android.R.drawable.ic_dialog_info)
                           .build()
                   }
-
-                  startForeground(1001, notification)
+                  startForeground(1002, notification)
               }
 
               override fun onDestroy() {
                   super.onDestroy()
                   sensorManager.unregisterListener(this)
-                  overlayView?.let {
-                      windowManager.removeView(it)
-                  }
+                  containerView?.let { windowManager.removeView(it) }
               }
           }
           EOF
