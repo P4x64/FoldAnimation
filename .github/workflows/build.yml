@@ -5,7 +5,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Generate Project Files
+      - name: Generate High-Fidelity Fold Demo
         run: |
           mkdir -p app/src/main/java/com/example/foldanimation
 
@@ -46,9 +46,9 @@ jobs:
               defaultConfig {
                   applicationId = "com.example.foldanimation"
                   minSdk = 31
-                  targetSdk = 33
-                  versionCode = 2
-                  versionName = "1.1"
+                  targetSdk = 34
+                  versionCode = 3
+                  versionName = "2.0"
               }
               buildTypes {
                   release {
@@ -68,26 +68,20 @@ jobs:
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
               <application
                   android:allowBackup="true"
                   android:icon="@android:drawable/sym_def_app_icon"
-                  android:label="Fold展开动画"
-                  android:theme="@android:style/Theme.DeviceDefault.Light">
+                  android:label="Fold8 Concept"
+                  android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
                   <activity
                       android:name=".MainActivity"
-                      android:exported="true">
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
-                  <service
-                      android:name=".FoldBlurService"
-                      android:exported="false" />
               </application>
           </manifest>
           EOF
@@ -96,226 +90,355 @@ jobs:
           package com.example.foldanimation
 
           import android.app.Activity
-          import android.content.Intent
-          import android.net.Uri
-          import android.os.Build
-          import android.os.Bundle
-          import android.provider.Settings
-          import android.widget.Button
-          import android.widget.LinearLayout
-          import android.widget.TextView
-          import android.widget.Toast
-
-          class MainActivity : Activity() {
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
-
-                  val layout = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      setPadding(60, 100, 60, 60)
-                  }
-
-                  val info = TextView(this).apply {
-                      text = "【Fold 动画服务】\n\n1. 授予悬浮窗权限\n2. 点击启动后返回桌面\n3. 观察右上角是否有角度数值跳动"
-                      textSize = 16f
-                      setPadding(0, 0, 0, 40)
-                  }
-
-                  val startBtn = Button(this).apply {
-                      text = "启动服务"
-                      setOnClickListener {
-                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this@MainActivity)) {
-                              val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
-                              startActivity(intent)
-                              return@setOnClickListener
-                          }
-                          val serviceIntent = Intent(this@MainActivity, FoldBlurService::class.java)
-                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                              startForegroundService(serviceIntent)
-                          } else {
-                              startService(serviceIntent)
-                          }
-                          Toast.makeText(this@MainActivity, "服务已启动，按Home回桌面查看", Toast.LENGTH_SHORT).show()
-                      }
-                  }
-
-                  val stopBtn = Button(this).apply {
-                      text = "停止服务"
-                      setOnClickListener {
-                          stopService(Intent(this@MainActivity, FoldBlurService::class.java))
-                          Toast.makeText(this@MainActivity, "服务已停止", Toast.LENGTH_SHORT).show()
-                      }
-                  }
-
-                  layout.addView(info)
-                  layout.addView(startBtn)
-                  layout.addView(stopBtn)
-                  setContentView(layout)
-              }
-          }
-          EOF
-
-          cat << 'EOF' > app/src/main/java/com/example/foldanimation/FoldBlurService.kt
-          package com.example.foldanimation
-
-          import android.app.Notification
-          import android.app.NotificationChannel
-          import android.app.NotificationManager
-          import android.app.Service
           import android.content.Context
-          import android.content.Intent
-          import android.graphics.Color
-          import android.graphics.PixelFormat
+          import android.content.res.Configuration
+          import android.graphics.*
+          import android.graphics.drawable.GradientDrawable
           import android.hardware.Sensor
           import android.hardware.SensorEvent
           import android.hardware.SensorEventListener
           import android.hardware.SensorManager
           import android.os.Build
-          import android.os.IBinder
+          import android.os.Bundle
           import android.view.Gravity
+          import android.view.View
           import android.view.WindowManager
-          import android.widget.FrameLayout
-          import android.widget.TextView
+          import android.widget.*
 
-          class FoldBlurService : Service(), SensorEventListener {
+          class MainActivity : Activity(), SensorEventListener {
 
-              private lateinit var windowManager: WindowManager
-              private var containerView: FrameLayout? = null
-              private lateinit var debugText: TextView
-              private lateinit var layoutParams: WindowManager.LayoutParams
               private lateinit var sensorManager: SensorManager
               private var hingeSensor: Sensor? = null
-              private var isBlurSupported = false
+              private lateinit var rootContainer: FrameLayout
+              private lateinit var contentLayer: LinearLayout
+              private var isUnfolded = false
+              private var currentAngle = 180f
 
-              override fun onBind(intent: Intent?): IBinder? = null
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
 
-              override fun onCreate() {
-                  super.onCreate()
-                  startAsForeground()
+                  // 隐藏一切系统条，做到 100% 真实全屏伪装
+                  hideSystemUI()
 
-                  windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
                   sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
                   hingeSensor = sensorManager.getDefaultSensor(Sensor.TYPE_HINGE_ANGLE)
 
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                      isBlurSupported = windowManager.isCrossWindowBlurEnabled
+                  rootContainer = FrameLayout(this).apply {
+                      layoutParams = FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.MATCH_PARENT,
+                          FrameLayout.LayoutParams.MATCH_PARENT
+                      )
                   }
+                  setContentView(rootContainer)
 
-                  initOverlay()
+                  checkScreenState(resources.configuration)
+                  buildDesktopUI()
+              }
 
+              override fun onResume() {
+                  super.onResume()
+                  hideSystemUI()
                   hingeSensor?.let {
                       sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST)
                   }
               }
 
-              private fun initOverlay() {
-                  containerView = FrameLayout(this).apply {
-                      // 关键修复：必须具备极浅的底色以强制 GPU 分配渲染 Surface
-                      setBackgroundColor(Color.argb(1, 0, 0, 0))
-                  }
+              override fun onPause() {
+                  super.onPause()
+                  sensorManager.unregisterListener(this)
+              }
 
-                  debugText = TextView(this).apply {
-                      textSize = 12f
-                      setTextColor(Color.YELLOW)
-                      setBackgroundColor(Color.argb(160, 0, 0, 0))
-                      setPadding(20, 10, 20, 10)
-                      val sensorStatus = if (hingeSensor != null) "正常" else "未找到"
-                      val blurStatus = if (isBlurSupported) "支持" else "未开启/不支持"
-                      text = "角度: 等待中 | 传感器: $sensorStatus | 系统模糊: $blurStatus"
-                  }
+              override fun onConfigurationChanged(newConfig: Configuration) {
+                  super.onConfigurationChanged(newConfig)
+                  hideSystemUI()
+                  checkScreenState(newConfig)
+                  buildDesktopUI()
+                  applyBlurEffect(currentAngle)
+              }
 
-                  val textParams = FrameLayout.LayoutParams(
-                      FrameLayout.LayoutParams.WRAP_CONTENT,
-                      FrameLayout.LayoutParams.WRAP_CONTENT
-                  ).apply {
-                      gravity = Gravity.TOP or Gravity.END
-                      topMargin = 120
-                      rightMargin = 40
-                  }
-                  containerView?.addView(debugText, textParams)
+              private fun checkScreenState(config: Configuration) {
+                  // 折叠屏展开宽度通常大于 600dp
+                  isUnfolded = config.smallestScreenWidthDp >= 600
+              }
 
-                  val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                  } else {
-                      WindowManager.LayoutParams.TYPE_PHONE
-                  }
-
-                  var flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                          WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                      flags = flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
-                  }
-
-                  layoutParams = WindowManager.LayoutParams(
-                      WindowManager.LayoutParams.MATCH_PARENT,
-                      WindowManager.LayoutParams.MATCH_PARENT,
-                      type,
-                      flags,
-                      PixelFormat.TRANSLUCENT
+              private fun hideSystemUI() {
+                  window.setFlags(
+                      WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                      WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
                   )
-
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                      layoutParams.blurBehindRadius = 0
-                  }
-
-                  windowManager.addView(containerView, layoutParams)
+                  window.decorView.systemUiVisibility = (
+                          View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                                  or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                                  or View.SYSTEM_UI_FLAG_FULLSCREEN
+                                  or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                                  or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                                  or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                          )
               }
 
               override fun onSensorChanged(event: SensorEvent?) {
                   event?.let {
-                      val angle = it.values[0]
-                      val blurStatus = if (isBlurSupported) "支持" else "未开启"
-                      debugText.text = "角度: ${angle.toInt()}° | 系统模糊: $blurStatus"
-                      applyEffectByAngle(angle)
+                      currentAngle = it.values[0]
+                      applyBlurEffect(currentAngle)
                   }
               }
 
               override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
-              private fun applyEffectByAngle(angle: Float) {
-                  // 过渡范围：120° 到 172° 之间进行景深展开
-                  val progress = ((angle - 120f) / (172f - 120f)).coerceIn(0f, 1f)
-                  val blurFactor = 1f - progress
+              // 物理开合景深过渡计算（完全复刻视频2的动态曲线）
+              private fun applyBlurEffect(angle: Float) {
+                  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
 
-                  if (isBlurSupported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                      val maxBlur = 80
-                      val targetRadius = if (angle >= 175f) 0 else (blurFactor * maxBlur).toInt()
-                      if (layoutParams.blurBehindRadius != targetRadius) {
-                          layoutParams.blurBehindRadius = targetRadius
-                          containerView?.let { windowManager.updateViewLayout(it, layoutParams) }
+                  val blurRadius: Float
+                  val scaleFactor: Float
+
+                  if (isUnfolded) {
+                      // 内屏展开阶段：110°~175° 从失焦虚化过渡到晶莹剔透的合焦
+                      val progress = ((angle - 115f) / (175f - 115f)).coerceIn(0f, 1f)
+                      blurRadius = (1f - progress) * 85f
+                      scaleFactor = 0.95f + (0.05f * progress)
+                  } else {
+                      // 外屏合拢阶段：0°~35° 闭合时锐利清晰，刚掀开时迅速景深失焦
+                      val progress = ((angle - 5f) / (35f - 5f)).coerceIn(0f, 1f)
+                      blurRadius = progress * 75f
+                      scaleFactor = 1f - (0.03f * progress)
+                  }
+
+                  contentLayer.scaleX = scaleFactor
+                  contentLayer.scaleY = scaleFactor
+
+                  if (blurRadius > 1.5f) {
+                      val blur = RenderEffect.createBlurEffect(blurRadius, blurRadius, Shader.TileMode.CLAMP)
+                      contentLayer.setRenderEffect(blur)
+                  } else {
+                      contentLayer.setRenderEffect(null)
+                  }
+              }
+
+              // 绘制 1:1 高仿桌面 UI（包含高质感深色组件、拟物壁纸与悬浮 Dock）
+              private fun buildDesktopUI() {
+                  rootContainer.removeAllViews()
+
+                  // 渐变仿真自然风光壁纸（与视频2岩石海岸同色系）
+                  val bgDrawable = GradientDrawable(
+                      GradientDrawable.Orientation.TOP_BOTTOM,
+                      intArrayOf(0xFF1B3A4B.toInt(), 0xFF3D5A80.toInt(), 0xFF5C6B73.toInt(), 0xFF2F3E46.toInt())
+                  )
+                  rootContainer.background = bgDrawable
+
+                  contentLayer = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      layoutParams = FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.MATCH_PARENT,
+                          FrameLayout.LayoutParams.MATCH_PARENT
+                      )
+                      setPadding(
+                          if (isUnfolded) 90 else 50,
+                          130,
+                          if (isUnfolded) 90 else 50,
+                          80
+                      )
+                  }
+
+                  // 顶部状态时间
+                  val clockText = TextView(this).apply {
+                      text = "8:27"
+                      textSize = 15f
+                      setTextColor(0xDDFFFFFF.toInt())
+                      setPadding(10, 0, 0, 30)
+                  }
+                  contentLayer.addView(clockText)
+
+                  // 顶部组件栏（Now brief / 天气 / 状态卡片）
+                  val widgetRow = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      layoutParams = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      )
+                  }
+
+                  val briefWidget = createWidgetCard("Now brief", "Get today's highlights", 0xFF0D2538.toInt(), 0xFF29B6F6.toInt())
+                  widgetRow.addView(briefWidget)
+
+                  val weatherWidget = createWidgetCard("91°", "Wed, 9 Sep\nSunny", 0xFF19456B.toInt(), 0xFFFFCA28.toInt())
+                  widgetRow.addView(weatherWidget)
+
+                  if (isUnfolded) {
+                      val statusWidget = createWidgetCard("Status", "What's your status?", 0xFF222831.toInt(), 0xFFAB47BC.toInt())
+                      widgetRow.addView(statusWidget)
+                  }
+
+                  contentLayer.addView(widgetRow)
+
+                  // 模拟应用图标网格
+                  val iconGrid = createIconGrid(if (isUnfolded) 6 else 4)
+                  contentLayer.addView(iconGrid)
+
+                  // 底部弹性空间
+                  val spacer = View(this).apply {
+                      layoutParams = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          0,
+                          1.0f
+                      )
+                  }
+                  contentLayer.addView(spacer)
+
+                  // 底部半透明毛玻璃 Dock 栏
+                  val dock = createDockBar(if (isUnfolded) 6 else 4)
+                  contentLayer.addView(dock)
+
+                  rootContainer.addView(contentLayer)
+              }
+
+              private fun createWidgetCard(title: String, subtitle: String, cardBg: Int, accentColor: Int): View {
+                  val card = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(
+                          0,
+                          260,
+                          1.0f
+                      ).apply {
+                          marginEnd = 24
                       }
-                  } else {
-                      // 降级方案：如果系统强行禁用了跨窗口模糊，使用半透明磨砂遮罩动态弥补视觉变化
-                      val alpha = (blurFactor * 120).toInt()
-                      containerView?.setBackgroundColor(Color.argb(alpha, 255, 255, 255))
+                      setPadding(35, 35, 35, 35)
+
+                      val shape = GradientDrawable().apply {
+                          shape = GradientDrawable.RECTANGLE
+                          cornerRadius = 45f
+                          setColor(cardBg)
+                      }
+                      background = shape
                   }
+
+                  val dot = View(this).apply {
+                      layoutParams = LinearLayout.LayoutParams(26, 26).apply { bottomMargin = 20 }
+                      val circle = GradientDrawable().apply {
+                          shape = GradientDrawable.OVAL
+                          setColor(accentColor)
+                      }
+                      background = circle
+                  }
+
+                  val tView = TextView(this).apply {
+                      text = title
+                      textSize = 17f
+                      setTextColor(0xFFFFFFFF.toInt())
+                      paint.isFakeBoldText = true
+                  }
+
+                  val sView = TextView(this).apply {
+                      text = subtitle
+                      textSize = 12f
+                      setTextColor(0xAAFFFFFF.toInt())
+                      setPadding(0, 8, 0, 0)
+                  }
+
+                  card.addView(dot)
+                  card.addView(tView)
+                  card.addView(sView)
+                  return card
               }
 
-              private fun startAsForeground() {
-                  val channelId = "fold_service"
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      val channel = NotificationChannel(channelId, "Fold Service", NotificationManager.IMPORTANCE_LOW)
-                      getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+              private fun createIconGrid(columns: Int): View {
+                  val grid = GridLayout(this).apply {
+                      columnCount = columns
+                      layoutParams = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      ).apply {
+                          topMargin = 60
+                      }
                   }
-                  val notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      Notification.Builder(this, channelId)
-                          .setContentTitle("Fold 展开服务运行中")
-                          .setSmallIcon(android.R.drawable.ic_dialog_info)
-                          .build()
-                  } else {
-                      Notification.Builder(this)
-                          .setContentTitle("Fold 展开服务运行中")
-                          .setSmallIcon(android.R.drawable.ic_dialog_info)
-                          .build()
+
+                  val appColors = intArrayOf(
+                      0xFFE53935.toInt(), 0xFF1E88E5.toInt(), 0xFF43A047.toInt(), 0xFFFB8C00.toInt(),
+                      0xFF8E24AA.toInt(), 0xFF00ACC1.toInt(), 0xFFF4511E.toInt(), 0xFF3949AB.toInt(),
+                      0xFF7CB342.toInt(), 0xFFD81B60.toInt(), 0xFF039BE5.toInt(), 0xFF00897B.toInt()
+                  )
+
+                  val totalIcons = if (isUnfolded) 12 else 8
+                  for (i in 0 until totalIcons) {
+                      val iconItem = LinearLayout(this).apply {
+                          orientation = LinearLayout.VERTICAL
+                          gravity = Gravity.CENTER
+                          layoutParams = GridLayout.LayoutParams().apply {
+                              width = 0
+                              columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
+                              bottomMargin = 45
+                          }
+                      }
+
+                      val squircle = View(this).apply {
+                          layoutParams = LinearLayout.LayoutParams(130, 130)
+                          val shape = GradientDrawable().apply {
+                              shape = GradientDrawable.RECTANGLE
+                              cornerRadius = 38f
+                              setColor(appColors[i % appColors.size])
+                          }
+                          background = shape
+                      }
+
+                      val label = TextView(this).apply {
+                          text = "App ${i + 1}"
+                          textSize = 12f
+                          setTextColor(0xEEFFFFFF.toInt())
+                          setPadding(0, 10, 0, 0)
+                      }
+
+                      iconItem.addView(squircle)
+                      iconItem.addView(label)
+                      grid.addView(iconItem)
                   }
-                  startForeground(1002, notification)
+                  return grid
               }
 
-              override fun onDestroy() {
-                  super.onDestroy()
-                  sensorManager.unregisterListener(this)
-                  containerView?.let { windowManager.removeView(it) }
+              private fun createDockBar(count: Int): View {
+                  val dockWrap = LinearLayout(this).apply {
+                      gravity = Gravity.CENTER
+                      layoutParams = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      )
+                  }
+
+                  val dock = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER
+                      layoutParams = LinearLayout.LayoutParams(
+                          if (isUnfolded) 800 else LinearLayout.LayoutParams.MATCH_PARENT,
+                          180
+                      )
+                      setPadding(40, 0, 40, 0)
+
+                      val shape = GradientDrawable().apply {
+                          shape = GradientDrawable.RECTANGLE
+                          cornerRadius = 90f
+                          setColor(0x44FFFFFF.toInt())
+                      }
+                      background = shape
+                  }
+
+                  val dockColors = intArrayOf(0xFF4CAF50.toInt(), 0xFF2196F3.toInt(), 0xFFFF9800.toInt(), 0xFFE91E63.toInt(), 0xFF9C27B0.toInt(), 0xFF00BCD4.toInt())
+                  for (i in 0 until count) {
+                      val icon = View(this).apply {
+                          layoutParams = LinearLayout.LayoutParams(110, 110).apply {
+                              leftMargin = 20
+                              rightMargin = 20
+                          }
+                          val shape = GradientDrawable().apply {
+                              shape = GradientDrawable.RECTANGLE
+                              cornerRadius = 35f
+                              setColor(dockColors[i % dockColors.size])
+                          }
+                          background = shape
+                      }
+                      dock.addView(icon)
+                  }
+
+                  dockWrap.addView(dock)
+                  return dockWrap
               }
           }
           EOF
