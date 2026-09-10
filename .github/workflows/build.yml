@@ -5,7 +5,21 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Generate Precise Fold8 Replica
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.5'
+
+      - name: Accept Android SDK Licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Generate Source Code
         run: |
           mkdir -p app/src/main/java/com/example/foldanimation
 
@@ -47,8 +61,8 @@ jobs:
                   applicationId = "com.example.foldanimation"
                   minSdk = 31
                   targetSdk = 34
-                  versionCode = 4
-                  versionName = "2.5"
+                  versionCode = 5
+                  versionName = "3.0"
               }
               buildTypes {
                   release {
@@ -87,96 +101,6 @@ jobs:
           </manifest>
           EOF
 
-          cat << 'EOF' > app/src/main/java/com/example/foldanimation/WallpaperView.kt
-          package com.example.foldanimation
-
-          import android.content.Context
-          import android.graphics.*
-          import android.view.View
-
-          // 1:1 绘制视频2同款 Lone Cypress 孤柏悬崖海景壁纸
-          class WallpaperView(context: Context, private val isUnfolded: Boolean) : View(context) {
-
-              private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-
-              override fun onDraw(canvas: Canvas) {
-                  super.onDraw(canvas)
-                  val w = width.toFloat()
-                  val h = height.toFloat()
-
-                  // 1. 天空渐变（夕阳暮色）
-                  val skyShader = LinearGradient(
-                      0f, 0f, 0f, h * 0.65f,
-                      intArrayOf(0xFF1E3C58.toInt(), 0xFF436582.toInt(), 0xFF8392A0.toInt(), 0xFF9FB1C1.toInt()),
-                      null, Shader.TileMode.CLAMP
-                  )
-                  paint.shader = skyShader
-                  canvas.drawRect(0f, 0f, w, h * 0.65f, paint)
-
-                  // 2. 海洋
-                  val seaShader = LinearGradient(
-                      0f, h * 0.55f, 0f, h,
-                      intArrayOf(0xFF163248.toInt(), 0xFF1B2E3D.toInt(), 0xFF142431.toInt()),
-                      null, Shader.TileMode.CLAMP
-                  )
-                  paint.shader = seaShader
-                  canvas.drawRect(0f, h * 0.55f, w, h, paint)
-
-                  // 3. 悬崖礁石（内屏居右，外屏居中）
-                  val rockCenterX = if (isUnfolded) w * 0.68f else w * 0.5f
-                  val cliffPath = Path().apply {
-                      moveTo(rockCenterX - w * 0.35f, h)
-                      cubicTo(
-                          rockCenterX - w * 0.2f, h * 0.72f,
-                          rockCenterX - w * 0.1f, h * 0.62f,
-                          rockCenterX, h * 0.60f
-                      )
-                      cubicTo(
-                          rockCenterX + w * 0.15f, h * 0.61f,
-                          rockCenterX + w * 0.28f, h * 0.75f,
-                          rockCenterX + w * 0.40f, h
-                      )
-                      close()
-                  }
-                  paint.shader = LinearGradient(
-                      0f, h * 0.6f, 0f, h,
-                      intArrayOf(0xFF5A6265.toInt(), 0xFF353C40.toInt(), 0xFF1E2224.toInt()),
-                      null, Shader.TileMode.CLAMP
-                  )
-                  canvas.drawPath(cliffPath, paint)
-
-                  // 4. 树干与孤柏枝叶（标志性轮廓）
-                  paint.shader = null
-                  paint.color = 0xFF191F22.toInt()
-                  paint.style = Paint.Style.STROKE
-                  paint.strokeWidth = if (isUnfolded) 18f else 14f
-                  paint.strokeCap = Paint.Cap.ROUND
-
-                  val trunkX = rockCenterX + (if (isUnfolded) 20f else 10f)
-                  val trunkY = h * 0.60f
-                  val trunkPath = Path().apply {
-                      moveTo(trunkX, trunkY)
-                      quadTo(trunkX - 25f, trunkY - 140f, trunkX - 10f, trunkY - 260f)
-                      quadTo(trunkX + 40f, trunkY - 320f, trunkX + 20f, trunkY - 400f)
-                  }
-                  canvas.drawPath(trunkPath, paint)
-
-                  // 枝桠
-                  paint.strokeWidth = 10f
-                  canvas.drawLine(trunkX - 10f, trunkY - 260f, trunkX - 90f, trunkY - 330f, paint)
-                  canvas.drawLine(trunkX + 15f, trunkY - 300f, trunkX + 110f, trunkY - 350f, paint)
-
-                  // 树冠深绿树叶云
-                  paint.style = Paint.Style.FILL
-                  paint.color = 0xFF18332A.toInt()
-                  canvas.drawOval(trunkX - 80f, trunkY - 430f, trunkX + 80f, trunkY - 370f, paint)
-                  canvas.drawOval(trunkX - 140f, trunkY - 360f, trunkX - 30f, trunkY - 310f, paint)
-                  canvas.drawOval(trunkX + 40f, trunkY - 375f, trunkX + 160f, trunkY - 325f, paint)
-                  canvas.drawOval(trunkX - 50f, trunkY - 460f, trunkX + 50f, trunkY - 410f, paint)
-              }
-          }
-          EOF
-
           cat << 'EOF' > app/src/main/java/com/example/foldanimation/MainActivity.kt
           package com.example.foldanimation
 
@@ -196,375 +120,362 @@ jobs:
           import android.view.WindowManager
           import android.widget.*
 
-          class MainActivity : Activity(), SensorEventListener {
+          class WallpaperView(context: Context, private val isUnfolded: Boolean) : View(context) {
+              private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+              override fun onDraw(canvas: Canvas) {
+                  super.onDraw(canvas)
+                  val w = width.toFloat()
+                  val h = height.toFloat()
+                  paint.shader = LinearGradient(0f, 0f, 0f, h * 0.65f, intArrayOf(0xFF1E3C58.toInt(), 0xFF436582.toInt(), 0xFF9FB1C1.toInt()), null, Shader.TileMode.CLAMP)
+                  canvas.drawRect(0f, 0f, w, h * 0.65f, paint)
+                  paint.shader = LinearGradient(0f, h * 0.55f, 0f, h, intArrayOf(0xFF163248.toInt(), 0xFF142431.toInt()), null, Shader.TileMode.CLAMP)
+                  canvas.drawRect(0f, h * 0.55f, w, h, paint)
 
-              private lateinit var sensorManager: SensorManager
-              private var hingeSensor: Sensor? = null
-              private lateinit var rootContainer: FrameLayout
-              
-              // 关键：分屏图层结构
+                  val cx = if (isUnfolded) w * 0.68f else w * 0.5f
+                  val path = Path().apply {
+                      moveTo(cx - w * 0.35f, h)
+                      cubicTo(cx - w * 0.2f, h * 0.72f, cx - w * 0.1f, h * 0.62f, cx, h * 0.60f)
+                      cubicTo(cx + w * 0.15f, h * 0.61f, cx + w * 0.28f, h * 0.75f, cx + w * 0.40f, h)
+                      close()
+                  }
+                  paint.shader = LinearGradient(0f, h * 0.6f, 0f, h, intArrayOf(0xFF5A6265.toInt(), 0xFF1E2224.toInt()), null, Shader.TileMode.CLAMP)
+                  canvas.drawPath(path, paint)
+
+                  paint.shader = null
+                  paint.color = 0xFF191F22.toInt()
+                  paint.style = Paint.Style.STROKE
+                  paint.strokeWidth = if (isUnfolded) 16f else 12f
+                  paint.strokeCap = Paint.Cap.ROUND
+                  val tx = cx + (if (isUnfolded) 18f else 10f)
+                  val ty = h * 0.60f
+                  val tPath = Path().apply {
+                      moveTo(tx, ty)
+                      quadTo(tx - 20f, ty - 120f, tx - 8f, ty - 220f)
+                      quadTo(tx + 30f, ty - 280f, tx + 15f, ty - 350f)
+                  }
+                  canvas.drawPath(tPath, paint)
+                  paint.strokeWidth = 8f
+                  canvas.drawLine(tx - 8f, ty - 220f, tx - 70f, ty - 270f, paint)
+                  canvas.drawLine(tx + 12f, ty - 250f, tx + 80f, ty - 290f, paint)
+                  paint.style = Paint.Style.FILL
+                  paint.color = 0xFF18332A.toInt()
+                  canvas.drawOval(tx - 70f, ty - 370f, tx + 70f, ty - 320f, paint)
+                  canvas.drawOval(tx - 110f, ty - 310f, tx - 20f, ty - 270f, paint)
+                  canvas.drawOval(tx + 30f, ty - 320f, tx + 120f, ty - 280f, paint)
+              }
+          }
+
+          class MainActivity : Activity(), SensorEventListener {
+              private lateinit var sm: SensorManager
+              private var hinge: Sensor? = null
+              private lateinit var root: FrameLayout
               private var leftPanel: LinearLayout? = null
               private var rightPanel: LinearLayout? = null
-              private var outerContentLayer: LinearLayout? = null
-
+              private var outerLayer: LinearLayout? = null
               private var isUnfolded = false
-              private var currentAngle = 180f
+              private var curAngle = 180f
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
-                  hideSystemUI()
-
-                  sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-                  hingeSensor = sensorManager.getDefaultSensor(Sensor.TYPE_HINGE_ANGLE)
-
-                  rootContainer = FrameLayout(this).apply {
-                      layoutParams = FrameLayout.LayoutParams(
-                          FrameLayout.LayoutParams.MATCH_PARENT,
-                          FrameLayout.LayoutParams.MATCH_PARENT
-                      )
-                  }
-                  setContentView(rootContainer)
-
-                  checkScreenState(resources.configuration)
+                  hideUI()
+                  sm = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+                  hinge = sm.getDefaultSensor(Sensor.TYPE_HINGE_ANGLE)
+                  root = FrameLayout(this)
+                  setContentView(root)
+                  checkScreen(resources.configuration)
                   rebuildUI()
               }
 
               override fun onResume() {
                   super.onResume()
-                  hideSystemUI()
-                  hingeSensor?.let {
-                      sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST)
-                  }
+                  hideUI()
+                  hinge?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST) }
               }
 
               override fun onPause() {
                   super.onPause()
-                  sensorManager.unregisterListener(this)
+                  sm.unregisterListener(this)
               }
 
               override fun onConfigurationChanged(newConfig: Configuration) {
                   super.onConfigurationChanged(newConfig)
-                  hideSystemUI()
-                  checkScreenState(newConfig)
+                  hideUI()
+                  checkScreen(newConfig)
                   rebuildUI()
-                  applyPhysicBlur(currentAngle)
+                  applyBlur(curAngle)
               }
 
-              private fun checkScreenState(config: Configuration) {
-                  isUnfolded = config.smallestScreenWidthDp >= 600
+              private fun checkScreen(c: Configuration) {
+                  isUnfolded = c.smallestScreenWidthDp >= 600
               }
 
-              private fun hideSystemUI() {
-                  window.setFlags(
-                      WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                      WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-                  )
-                  window.decorView.systemUiVisibility = (
-                          View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                                  or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                                  or View.SYSTEM_UI_FLAG_FULLSCREEN
-                                  or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                                  or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                                  or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                          )
+              private fun hideUI() {
+                  window.setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
+                  window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_FULLSCREEN)
               }
 
-              override fun onSensorChanged(event: SensorEvent?) {
-                  event?.let {
-                      currentAngle = it.values[0]
-                      applyPhysicBlur(currentAngle)
+              override fun onSensorChanged(e: SensorEvent?) {
+                  e?.let {
+                      curAngle = it.values[0]
+                      applyBlur(curAngle)
                   }
               }
 
-              override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+              override fun onAccuracyChanged(s: Sensor?, a: Int) {}
 
-              // 核心物理引擎：还原视频2的非对称虚化与外屏瞬时合焦
-              private fun applyPhysicBlur(angle: Float) {
+              private fun applyBlur(angle: Float) {
                   if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-
                   if (isUnfolded) {
-                      // 【内屏模式】：左扇面深度景深失焦 -> 展开合焦；右侧锚点保持清晰
                       val progress = ((angle - 110f) / (175f - 110f)).coerceIn(0f, 1f)
-                      val blurRadius = (1f - progress) * 85f
-
-                      leftPanel?.let { panel ->
-                          panel.alpha = 0.6f + (0.4f * progress)
-                          panel.scaleX = 0.94f + (0.06f * progress)
-                          panel.scaleY = 0.94f + (0.06f * progress)
-                          panel.translationX = (1f - progress) * -40f // 物理展开视差推入
-
-                          if (blurRadius > 1.5f) {
-                              panel.setRenderEffect(RenderEffect.createBlurEffect(blurRadius, blurRadius, Shader.TileMode.CLAMP))
-                          } else {
-                              panel.setRenderEffect(null)
-                          }
+                      val blur = (1f - progress) * 80f
+                      leftPanel?.let { p ->
+                          p.alpha = 0.6f + (0.4f * progress)
+                          p.scaleX = 0.94f + (0.06f * progress)
+                          p.scaleY = 0.94f + (0.06f * progress)
+                          p.translationX = (1f - progress) * -40f
+                          p.setRenderEffect(if (blur > 1.5f) RenderEffect.createBlurEffect(blur, blur, Shader.TileMode.CLAMP) else null)
                       }
-                      // 右侧面板始终保持锐利
                       rightPanel?.setRenderEffect(null)
                   } else {
-                      // 【外屏模式】：0°合盖瞬间完全清晰(合焦)；翻开(0°->35°)瞬间深度模糊
                       val progress = ((angle - 3f) / (35f - 3f)).coerceIn(0f, 1f)
-                      val blurRadius = progress * 75f
-
-                      outerContentLayer?.let { layer ->
-                          if (blurRadius > 1.5f) {
-                              layer.setRenderEffect(RenderEffect.createBlurEffect(blurRadius, blurRadius, Shader.TileMode.CLAMP))
-                          } else {
-                              layer.setRenderEffect(null)
-                          }
-                      }
+                      val blur = progress * 75f
+                      outerLayer?.setRenderEffect(if (blur > 1.5f) RenderEffect.createBlurEffect(blur, blur, Shader.TileMode.CLAMP) else null)
                   }
               }
 
               private fun rebuildUI() {
-                  rootContainer.removeAllViews()
-                  rootContainer.addView(WallpaperView(this, isUnfolded))
-
-                  if (isUnfolded) {
-                      buildInnerUnfoldedUI()
-                  } else {
-                      buildOuterCoverUI()
-                  }
+                  root.removeAllViews()
+                  root.addView(WallpaperView(this, isUnfolded))
+                  if (isUnfolded) buildInner() else buildOuter()
+                  addClock()
               }
 
-              // 1. 构建内屏界面（左右非对称分屏结构）
-              private fun buildInnerUnfoldedUI() {
+              private fun addClock() {
+                  val tv = TextView(this).apply {
+                      text = "8:27"
+                      textSize = 14f
+                      setTextColor(0xDDFFFFFF.toInt())
+                      paint.isFakeBoldText = true
+                      layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT).apply {
+                          topMargin = 40
+                          leftMargin = 50
+                      }
+                  }
+                  root.addView(tv)
+              }
+
+              private fun buildInner() {
                   val hBox = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
-                      layoutParams = FrameLayout.LayoutParams(
-                          FrameLayout.LayoutParams.MATCH_PARENT,
-                          FrameLayout.LayoutParams.MATCH_PARENT
-                      )
+                      layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
                       setPadding(60, 110, 60, 40)
                   }
 
-                  // === 左扇面（挂载实时动态虚化） ===
                   leftPanel = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.0f).apply {
-                          marginEnd = 30
-                      }
-
-                      // 顶部左组件排
-                      val topWidgets = LinearLayout(this@MainActivity).apply {
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.0f).apply { marginEnd = 30 }
+                      val topW = LinearLayout(this@MainActivity).apply {
                           orientation = LinearLayout.HORIZONTAL
                           layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                          addView(createBrief(true))
+                          addView(createWeather(true))
                       }
-                      topWidgets.addView(createNowBriefWidget(true))
-                      topWidgets.addView(createWeatherWidget(true))
-                      addView(topWidgets)
-
-                      // 主桌面应用网格
-                      addView(createAppGrid(4, true))
-
-                      // 占位推到底部
-                      addView(View(this@MainActivity).apply {
-                          layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f)
-                      })
+                      addView(topW)
+                      addView(createGrid(4, true))
+                      addView(View(this@MainActivity).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f) })
                   }
 
-                  // === 右侧锚点面板（保持清晰） ===
                   rightPanel = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.0f).apply {
-                          marginStart = 30
-                      }
-
-                      val topRightRow = LinearLayout(this@MainActivity).apply {
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.0f).apply { marginStart = 30 }
+                      val topR = LinearLayout(this@MainActivity).apply {
                           orientation = LinearLayout.HORIZONTAL
                           layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                          val folders = LinearLayout(this@MainActivity).apply {
+                              orientation = LinearLayout.HORIZONTAL
+                              layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f)
+                              addView(createApp("OpenCode", 0xFFFFFFFF.toInt(), false))
+                              addView(createApp("My Files", 0xFFFFA000.toInt(), false))
+                          }
+                          addView(folders)
+                          addView(createStatus())
                       }
-                      // OpenCode / My Files 文件夹
-                      val folders = LinearLayout(this@MainActivity).apply {
-                          orientation = LinearLayout.HORIZONTAL
-                          layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f)
-                          addView(createSingleAppIcon("OpenCode", 0xFFFFFFFF.toInt(), 0xFF1E222A.toInt()))
-                          addView(createSingleAppIcon("My Files", 0xFFFFA000.toInt(), 0xFFFFFFFF.toInt()))
-                      }
-                      topRightRow.addView(folders)
-                      topRightRow.addView(createStatusWidget())
-                      addView(topRightRow)
-
-                      // 占位
-                      addView(View(this@MainActivity).apply {
-                          layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f)
-                      })
+                      addView(topR)
+                      addView(View(this@MainActivity).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f) })
                   }
 
                   hBox.addView(leftPanel)
                   hBox.addView(rightPanel)
-                  rootContainer.addView(hBox)
+                  root.addView(hBox)
 
-                  // 底部中央居中 Dock 栏（覆盖在分屏之上）
                   val dockWrap = FrameLayout(this).apply {
                       layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT).apply {
                           gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
                           bottomMargin = 50
                       }
+                      addView(createDock(6))
                   }
-                  dockWrap.addView(createDockBar(6))
-                  rootContainer.addView(dockWrap)
-
-                  // 顶部状态时间
-                  addStatusBarText("8:27")
+                  root.addView(dockWrap)
               }
 
-              // 2. 构建外屏单列界面
-              private fun buildOuterCoverUI() {
-                  outerContentLayer = LinearLayout(this).apply {
+              private fun buildOuter() {
+                  outerLayer = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      layoutParams = FrameLayout.LayoutParams(
-                          FrameLayout.LayoutParams.MATCH_PARENT,
-                          FrameLayout.LayoutParams.MATCH_PARENT
-                      )
+                      layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
                       setPadding(45, 110, 45, 45)
-
-                      // 外屏顶部两个组件并排
-                      val topWidgets = LinearLayout(this@MainActivity).apply {
+                      val topW = LinearLayout(this@MainActivity).apply {
                           orientation = LinearLayout.HORIZONTAL
                           layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                          addView(createBrief(false))
+                          addView(createWeather(false))
                       }
-                      topWidgets.addView(createNowBriefWidget(false))
-                      topWidgets.addView(createWeatherWidget(false))
-                      addView(topWidgets)
-
-                      // 外屏 4x3 图标网格
-                      addView(createAppGrid(4, false))
-
-                      // 弹性空间
-                      addView(View(this@MainActivity).apply {
-                          layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f)
-                      })
-
-                      // 外屏底部 Dock
-                      addView(createDockBar(4))
+                      addView(topW)
+                      addView(createGrid(4, false))
+                      addView(View(this@MainActivity).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f) })
+                      addView(createDock(4))
                   }
-
-                  rootContainer.addView(outerContentLayer)
-                  addStatusBarText("8:27")
+                  root.addView(outerLayer)
               }
 
-              private fun addStatusBarText(time: String) {
-                  val tv = TextView(this).apply {
-                      text = time
-                      textSize = 14f
-                      setTextColor(0xDDFFFFFF.toInt())
-                      paint.isFakeBoldText = true
-                      layoutParams = FrameLayout.LayoutParams(
-                          FrameLayout.LayoutParams.WRAP_CONTENT,
-                          FrameLayout.LayoutParams.WRAP_CONTENT
-                      ).apply {
-                          topMargin = 40
-                          leftMargin = 50
-                      }
-                  }
-                  rootContainer.addView(tv)
-              }
-
-              // 组件 1: Now brief（带青色垂直胶囊指示器）
-              private fun createNowBriefWidget(isInner: Boolean): View {
+              private fun createBrief(isInner: Boolean): View {
                   val card = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      layoutParams = LinearLayout.LayoutParams(0, if (isInner) 250 else 230, 1.0f).apply {
-                          marginEnd = 16
-                      }
+                      layoutParams = LinearLayout.LayoutParams(0, if (isInner) 250 else 230, 1.0f).apply { marginEnd = 16 }
                       setPadding(30, 30, 30, 30)
-                      background = GradientDrawable().apply {
-                          cornerRadius = 45f
-                          setColor(0xEE102434.toInt())
-                      }
+                      background = GradientDrawable().apply { cornerRadius = 45f; setColor(0xEE102434.toInt()) }
                   }
-                  // 青色竖条条
                   val bar = View(this).apply {
                       layoutParams = LinearLayout.LayoutParams(16, 32).apply { bottomMargin = 22 }
-                      background = GradientDrawable().apply {
-                          cornerRadius = 8f
-                          setColor(0xFF00E5FF.toInt())
-                      }
+                      background = GradientDrawable().apply { cornerRadius = 8f; setColor(0xFF00E5FF.toInt()) }
                   }
-                  val title = TextView(this).apply {
-                      text = "Now brief"
-                      textSize = 16f
-                      setTextColor(0xFFFFFFFF.toInt())
-                      paint.isFakeBoldText = true
-                  }
-                  val sub = TextView(this).apply {
-                      text = "Get today's\nhighlights"
-                      textSize = 12f
-                      setTextColor(0x99FFFFFF.toInt())
-                      setPadding(0, 8, 0, 0)
-                  }
+                  val t = TextView(this).apply { text = "Now brief"; textSize = 16f; setTextColor(0xFFFFFFFF.toInt()); paint.isFakeBoldText = true }
+                  val s = TextView(this).apply { text = "Get today's\nhighlights"; textSize = 12f; setTextColor(0x99FFFFFF.toInt()); setPadding(0, 8, 0, 0) }
                   card.addView(bar)
-                  card.addView(title)
-                  card.addView(sub)
+                  card.addView(t)
+                  card.addView(s)
                   return card
               }
 
-              // 组件 2: 91° 天气（带金色太阳圆点）
-              private fun createWeatherWidget(isInner: Boolean): View {
+              private fun createWeather(isInner: Boolean): View {
                   val card = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      layoutParams = LinearLayout.LayoutParams(0, if (isInner) 250 else 230, 1.0f).apply {
-                          marginStart = 16
-                      }
+                      layoutParams = LinearLayout.LayoutParams(0, if (isInner) 250 else 230, 1.0f).apply { marginStart = 16 }
                       setPadding(30, 30, 30, 30)
-                      background = GradientDrawable().apply {
-                          cornerRadius = 45f
-                          setColor(0xEE163B5C.toInt())
-                      }
+                      background = GradientDrawable().apply { cornerRadius = 45f; setColor(0xEE163B5C.toInt()) }
                   }
                   val dot = View(this).apply {
                       layoutParams = LinearLayout.LayoutParams(26, 26).apply { bottomMargin = 20 }
-                      background = GradientDrawable().apply {
-                          shape = GradientDrawable.OVAL
-                          setColor(0xFFFFCA28.toInt())
-                      }
+                      background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xFFFFCA28.toInt()) }
                   }
-                  val temp = TextView(this).apply {
-                      text = "91°"
-                      textSize = 20f
-                      setTextColor(0xFFFFFFFF.toInt())
-                      paint.isFakeBoldText = true
-                  }
-                  val sub = TextView(this).apply {
-                      text = "Wed, 9 Sep\nSunny"
-                      textSize = 12f
-                      setTextColor(0xAAFFFFFF.toInt())
-                      setPadding(0, 6, 0, 0)
-                  }
+                  val t = TextView(this).apply { text = "91°"; textSize = 20f; setTextColor(0xFFFFFFFF.toInt()); paint.isFakeBoldText = true }
+                  val s = TextView(this).apply { text = "Wed, 9 Sep\nSunny"; textSize = 12f; setTextColor(0xAAFFFFFF.toInt()); setPadding(0, 6, 0, 0) }
                   card.addView(dot)
-                  card.addView(temp)
-                  card.addView(sub)
+                  card.addView(t)
+                  card.addView(s)
                   return card
               }
 
-              // 组件 3: Status（紫色指示器）
-              private fun createStatusWidget(): View {
+              private fun createStatus(): View {
                   val card = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      layoutParams = LinearLayout.LayoutParams(0, 250, 1.0f).apply {
-                          marginStart = 20
-                      }
+                      layoutParams = LinearLayout.LayoutParams(0, 250, 1.0f).apply { marginStart = 20 }
                       setPadding(30, 30, 30, 30)
-                      background = GradientDrawable().apply {
-                          cornerRadius = 45f
-                          setColor(0xEE1E242C.toInt())
-                      }
+                      background = GradientDrawable().apply { cornerRadius = 45f; setColor(0xEE1E242C.toInt()) }
                   }
                   val dot = View(this).apply {
                       layoutParams = LinearLayout.LayoutParams(24, 24).apply { bottomMargin = 20 }
-                      background = GradientDrawable().apply {
-                          shape = GradientDrawable.OVAL
-                          setColor(0xFFBA68C8.toInt())
+                      background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xFFBA68C8.toInt()) }
+                  }
+                  val t = TextView(this).apply { text = "Status"; textSize = 16f; setTextColor(0xFFFFFFFF.toInt()); paint.isFakeBoldText = true }
+                  val s = TextView(this).apply { text = "What's your status?"; textSize = 12f; setTextColor(0x99FFFFFF.toInt()); setPadding(0, 8, 0, 0) }
+                  card.addView(dot)
+                  card.addView(t)
+                  card.addView(s)
+                  return card
+              }
+
+              private fun createGrid(cols: Int, isInner: Boolean): View {
+                  val grid = GridLayout(this).apply {
+                      columnCount = cols
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = 50 }
+                  }
+                  val apps = listOf(
+                      Pair("Firefox", 0xFFE65100.toInt()),
+                      Pair("Camera", 0xFF212121.toInt()),
+                      Pair("Photos", 0xFFFFFFFF.toInt()),
+                      Pair("Settings", 0xFF455A64.toInt()),
+                      Pair("Music", 0xFFFA2D48.toInt()),
+                      Pair("Notes", 0xFFFFB300.toInt()),
+                      Pair("Clock", 0xFF1E88E5.toInt()),
+                      Pair("Health", 0xFF00B0FF.toInt())
+                  )
+                  val count = if (isInner) 6 else 8
+                  for (i in 0 until count) {
+                      val app = apps[i % apps.size]
+                      val v = createApp(app.first, app.second, app.first == "Settings")
+                      v.layoutParams = GridLayout.LayoutParams().apply {
+                          width = 0
+                          columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
+                          bottomMargin = 35
                       }
+                      grid.addView(v)
                   }
-                  val title = TextView(this).apply {
-                      text = "Status"
-                      textSize = 16f
-                      setTextColor(0xFFFFFFFF.toInt())
-                      paint.isFakeBoldText = true
+                  return grid
+              }
+
+              private fun createApp(name: String, bg: Int, hasBadge: Boolean): View {
+                  val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
+                  val wrap = FrameLayout(this).apply { layoutParams = LinearLayout.LayoutParams(125, 125) }
+                  val sq = View(this).apply {
+                      layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+                      background = GradientDrawable().apply { cornerRadius = 38f; setColor(bg) }
                   }
-                  val sub = TextView(this).apply {
-                      text = "What's your status?"
-                      textSize = 12f
-                      setTextColor(0x99
+                  wrap.addView(sq)
+                  if (hasBadge) {
+                      val badge = TextView(this).apply {
+                          text = "1"
+                          textSize = 10f
+                          setTextColor(Color.WHITE)
+                          gravity = Gravity.CENTER
+                          background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xFFF44336.toInt()) }
+                          layoutParams = FrameLayout.LayoutParams(38, 38).apply { gravity = Gravity.TOP or Gravity.END; topMargin = -6; rightMargin = -6 }
+                      }
+                      wrap.addView(badge)
+                  }
+                  val lbl = TextView(this).apply { text = name; textSize = 11f; setTextColor(0xEEFFFFFF.toInt()); setPadding(0, 10, 0, 0) }
+                  layout.addView(wrap)
+                  layout.addView(lbl)
+                  return layout
+              }
+
+              private fun createDock(count: Int): View {
+                  val dock = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER
+                      layoutParams = LinearLayout.LayoutParams(if (isUnfolded) 760 else LinearLayout.LayoutParams.MATCH_PARENT, 170)
+                      setPadding(30, 0, 30, 0)
+                      background = GradientDrawable().apply { cornerRadius = 85f; setColor(0x40FFFFFF.toInt()) }
+                  }
+                  val colors = intArrayOf(0xFF4CAF50.toInt(), 0xFF1976D2.toInt(), 0xFFFF9800.toInt(), 0xFFE91E63.toInt(), 0xFF9C27B0.toInt(), 0xFF00BCD4.toInt())
+                  for (i in 0 until count) {
+                      val itm = View(this).apply {
+                          layoutParams = LinearLayout.LayoutParams(105, 105).apply { leftMargin = 16; rightMargin = 16 }
+                          background = GradientDrawable().apply { cornerRadius = 34f; setColor(colors[i % colors.size]) }
+                      }
+                      dock.addView(itm)
+                  }
+                  return dock
+              }
+          }
+          EOF
+
+      - name: Build Debug APK
+        run: |
+          gradle assembleDebug --no-daemon
+          test -f app/build/outputs/apk/debug/app-debug.apk || exit 1
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fold8-Concept-APK
+          path: app/build/outputs/apk/debug/*.apk
