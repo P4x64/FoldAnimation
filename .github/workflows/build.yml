@@ -19,7 +19,7 @@ jobs:
       - name: Accept Android SDK Licenses
         run: yes | sdkmanager --licenses || true
 
-      - name: Generate Deep Optical Engine Source
+      - name: Generate True Optical Cinema Engine
         run: |
           mkdir -p app/src/main/java/com/example/foldanimation
 
@@ -61,8 +61,8 @@ jobs:
                   applicationId = "com.example.foldanimation"
                   minSdk = 31
                   targetSdk = 34
-                  versionCode = 10
-                  versionName = "8.0"
+                  versionCode = 15
+                  versionName = "10.0"
               }
               buildTypes {
                   release {
@@ -82,7 +82,10 @@ jobs:
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
               <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
               <application
                   android:allowBackup="true"
                   android:icon="@android:drawable/sym_def_app_icon"
@@ -91,6 +94,8 @@ jobs:
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
+                      android:showWhenLocked="true"
+                      android:turnScreenOn="true"
                       android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density"
                       android:resizeableActivity="true">
                       <intent-filter>
@@ -108,7 +113,6 @@ jobs:
           import android.app.Activity
           import android.app.WallpaperManager
           import android.content.Context
-          import android.content.Intent
           import android.content.pm.ResolveInfo
           import android.content.res.Configuration
           import android.graphics.*
@@ -121,6 +125,7 @@ jobs:
           import android.os.BatteryManager
           import android.os.Build
           import android.os.Bundle
+          import android.os.PowerManager
           import android.view.Choreographer
           import android.view.Gravity
           import android.view.View
@@ -130,48 +135,46 @@ jobs:
           import java.util.*
           import kotlin.math.abs
 
-          data class RealAppItem(val label: String, val icon: Drawable, val pkg: String)
+          data class RealApp(val name: String, val icon: Drawable, val pkg: String)
 
           class MainActivity : Activity(), SensorEventListener, Choreographer.FrameCallback {
 
               private lateinit var sm: SensorManager
               private var hinge: Sensor? = null
-              private lateinit var root: FrameLayout
-              
-              private var leftPanel: LinearLayout? = null
-              private var rightPanel: LinearLayout? = null
-              private var outerLayer: LinearLayout? = null
-              private var creaseShadowView: View? = null
-              private var dockBarView: View? = null
+              private var wakeLock: PowerManager.WakeLock? = null
 
-              private val myApps = mutableListOf<RealAppItem>()
+              private lateinit var rootFrame: FrameLayout
+              private lateinit var wholeSceneLayer: FrameLayout // 核心：整屏全景统一光影视效层
+              private var dockWrap: View? = null
+
+              private val apps = mutableListOf<RealApp>()
               private var isUnfolded = false
 
-              // 物理插值状态：目标角度与当前平滑阻尼角度
-              private var rawTargetAngle = 180f
-              private var smoothedAngle = 180f
-              private var lastAppliedBlurRadius = -1f
+              // 120Hz 光学阻尼参数
+              private var targetAngle = 180f
+              private var smoothAngle = 180f
+              private var lastBlur = -1f
 
               private fun dp(v: Float): Int = (v * resources.displayMetrics.density).toInt()
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
-                  setupImmersiveCutout()
+                  setupAntiSleepAndImmersive()
 
                   sm = getSystemService(Context.SENSOR_SERVICE) as SensorManager
                   hinge = sm.getDefaultSensor(Sensor.TYPE_HINGE_ANGLE)
 
-                  root = FrameLayout(this)
-                  setContentView(root)
+                  rootFrame = FrameLayout(this)
+                  setContentView(rootFrame)
 
-                  loadDeviceRealApps()
-                  checkScreen(resources.configuration)
-                  rebuildDesktopUI()
+                  loadRealApps()
+                  checkScreenState(resources.configuration)
+                  rebuildScene()
               }
 
               override fun onResume() {
                   super.onResume()
-                  setupImmersiveCutout()
+                  setupAntiSleepAndImmersive()
                   hinge?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST) }
                   Choreographer.getInstance().postFrameCallback(this)
               }
@@ -182,23 +185,39 @@ jobs:
                   Choreographer.getInstance().removeFrameCallback(this)
               }
 
-              override fun onConfigurationChanged(newConfig: Configuration) {
-                  super.onConfigurationChanged(newConfig)
-                  setupImmersiveCutout()
-                  checkScreen(newConfig)
-                  rebuildDesktopUI()
-                  lastAppliedBlurRadius = -1f
+              override fun onDestroy() {
+                  super.onDestroy()
+                  wakeLock?.let { if (it.isHeld) it.release() }
               }
 
-              private fun checkScreen(c: Configuration) {
+              // 屏幕折叠翻转热切换（零重新加载，画面不断连）
+              override fun onConfigurationChanged(newConfig: Configuration) {
+                  super.onConfigurationChanged(newConfig)
+                  setupAntiSleepAndImmersive()
+                  checkScreenState(newConfig)
+                  rebuildScene()
+                  lastBlur = -1f
+              }
+
+              private fun checkScreenState(c: Configuration) {
                   isUnfolded = c.smallestScreenWidthDp >= 600
               }
 
-              private fun setupImmersiveCutout() {
+              // 强力禁止内外屏休眠与断电锁屏
+              private fun setupAntiSleepAndImmersive() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                      setShowWhenLocked(true)
+                      setTurnScreenOn(true)
+                  }
+                  window.addFlags(
+                      WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                      WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                      WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                      WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                  )
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                       window.attributes.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
                   }
-                  window.setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
                   window.decorView.systemUiVisibility = (
                           View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                                   or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
@@ -207,428 +226,320 @@ jobs:
                                   or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                                   or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                           )
+
+                  if (wakeLock == null) {
+                      val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                      wakeLock = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "FoldAnimation::DualAwake")
+                      wakeLock?.acquire(10 * 60 * 1000L)
+                  }
               }
 
-              private fun loadDeviceRealApps() {
-                  myApps.clear()
+              private fun loadRealApps() {
+                  apps.clear()
                   val pm = packageManager
-                  val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
-                      addCategory(Intent.CATEGORY_LAUNCHER)
+                  val intent = android.content.Intent(android.content.Intent.ACTION_MAIN, null).apply {
+                      addCategory(android.content.Intent.CATEGORY_LAUNCHER)
                   }
-                  val list: List<ResolveInfo> = pm.queryIntentActivities(mainIntent, 0)
-                  for (info in list) {
-                      if (info.activityInfo.packageName == packageName) continue
-                      val name = info.loadLabel(pm).toString()
-                      val icon = info.loadIcon(pm)
-                      myApps.add(RealAppItem(name, icon, info.activityInfo.packageName))
+                  val list: List<ResolveInfo> = pm.queryIntentActivities(intent, 0)
+                  for (i in list) {
+                      if (i.activityInfo.packageName == packageName) continue
+                      apps.add(RealApp(i.loadLabel(pm).toString(), i.loadIcon(pm), i.activityInfo.packageName))
                   }
               }
 
               override fun onSensorChanged(e: SensorEvent?) {
-                  e?.let {
-                      rawTargetAngle = it.values[0]
-                  }
+                  e?.let { targetAngle = it.values[0] }
               }
 
               override fun onAccuracyChanged(s: Sensor?, a: Int) {}
 
-              // === 核心：120Hz 渲染管线帧循环，彻底消除跳动与卡顿 ===
+              // 120Hz 逐帧物理平滑驱动
               override fun doFrame(frameTimeNanos: Long) {
-                  // 阻尼滤波插值（指数滑动平均，实现跟手但极其平滑的物理质感）
-                  val lerpFactor = 0.22f
-                  smoothedAngle += (rawTargetAngle - smoothedAngle) * lerpFactor
-
-                  applyDeepOpticalTransition(smoothedAngle)
-
+                  val lerp = 0.22f
+                  smoothAngle += (targetAngle - smoothAngle) * lerp
+                  applyTrueCinemaFocus(smoothAngle)
                   Choreographer.getInstance().postFrameCallback(this)
               }
 
-              // === 深度复刻视频 2：三次光学拉焦 + 中轴锚定扇形缩放 + 中缝立体阴影 ===
-              private fun applyDeepOpticalTransition(angle: Float) {
+              // 视频 2 真实复刻：全景大光圈拉焦与合焦算法
+              private fun applyTrueCinemaFocus(angle: Float) {
                   if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
 
+                  val focusFactor: Float
+                  val blurRadius: Float
+
                   if (isUnfolded) {
-                      // 展开过渡区间：105° 到 176°
-                      val rawProgress = ((angle - 105f) / (176f - 105f)).coerceIn(0f, 1f)
-                      // 三次埃尔米特（Hermite Smoothstep）曲线：真实镜头的拉焦非线性曲线
-                      val smoothProgress = rawProgress * rawProgress * (3f - 2f * rawProgress)
-                      val focusFactor = smoothProgress
+                      // 【内屏开合】：110° 到 176° 进行全屏拉焦；176°~180° 瞬间合焦
+                      val rawP = ((angle - 110f) / (175f - 110f)).coerceIn(0f, 1f)
+                      focusFactor = rawP * rawP * (3f - 2f * rawP) // 三次 Hermite 镜头光学拉焦
+                      blurRadius = if (angle >= 174f) 0f else (1f - focusFactor) * 85f
 
-                      // 1. 光学景深散景半径计算（高斯核动态退火）
-                      val targetBlur = if (angle >= 175f) 0f else (1f - focusFactor) * 95f
-
-                      leftPanel?.let { panel ->
-                          // 2. 关键：中轴转轴锚定（Pivot 锁定在转轴右边缘）
-                          panel.pivotX = panel.width.toFloat()
-                          panel.pivotY = panel.height * 0.5f
-
-                          // 3. 扇形开合视差缩放（水平横向延展 + 垂直微放）
-                          val scaleX = 0.86f + (0.14f * focusFactor)
-                          val scaleY = 0.90f + (0.10f * focusFactor)
-                          panel.scaleX = scaleX
-                          panel.scaleY = scaleY
-
-                          // 4. 水平视差位移与光影明暗
-                          panel.translationX = (1f - focusFactor) * -dp(36f)
-                          panel.alpha = 0.60f + (0.40f * focusFactor)
-
-                          // 5. 硬件模糊着色器（带阈值过滤，避免频繁分配 Skia 句柄）
-                          if (abs(targetBlur - lastAppliedBlurRadius) > 1.0f) {
-                              lastAppliedBlurRadius = targetBlur
-                              if (targetBlur > 1.5f) {
-                                  panel.setRenderEffect(RenderEffect.createBlurEffect(targetBlur, targetBlur, Shader.TileMode.CLAMP))
-                              } else {
-                                  panel.setRenderEffect(null)
-                              }
-                          }
-                      }
-
-                      // 6. 中缝物理折痕深度阴影（开合时立体加深，摆平时完全隐退）
-                      creaseShadowView?.let { shadow ->
-                          val shadowAlpha = (1f - focusFactor) * 0.55f
-                          shadow.alpha = shadowAlpha
-                      }
-
-                      // 7. 底部悬浮 Dock 栏微动效展开
-                      dockBarView?.let { dock ->
-                          dock.scaleX = 0.88f + (0.12f * focusFactor)
-                          dock.alpha = 0.65f + (0.35f * focusFactor)
-                      }
-
-                      // 右侧视觉重心面板始终保持锐利
-                      rightPanel?.setRenderEffect(null)
-
+                      wholeSceneLayer.pivotX = wholeSceneLayer.width * 0.5f
+                      wholeSceneLayer.pivotY = wholeSceneLayer.height * 0.5f
+                      wholeSceneLayer.scaleX = 0.94f + (0.06f * focusFactor)
+                      wholeSceneLayer.scaleY = 0.94f + (0.06f * focusFactor)
+                      wholeSceneLayer.alpha = 0.75f + (0.25f * focusFactor)
                   } else {
-                      // 外屏模式：开屏中动态失焦，合紧至 0° 的刹那触发弹簧合焦
-                      val progress = ((angle - 3f) / (32f - 3f)).coerceIn(0f, 1f)
-                      val smoothProgress = progress * progress * (3f - 2f * progress)
-                      val blurRadius = smoothProgress * 80f
+                      // 【外屏合盖】：开屏时（0°~45°）失焦扩散；扣紧到 0° 时瞬间锐利合焦
+                      val rawP = ((angle - 3f) / (40f - 3f)).coerceIn(0f, 1f)
+                      val defocusFactor = rawP * rawP * (3f - 2f * rawP)
+                      blurRadius = if (angle <= 2.5f) 0f else defocusFactor * 80f
+                      focusFactor = 1f - defocusFactor
 
-                      outerLayer?.let { layer ->
-                          if (angle <= 2f) {
-                              // 合紧扣合的瞬间（0° 吸附弹簧效果）
-                              layer.scaleX = 1.0f
-                              layer.scaleY = 1.0f
-                              layer.setRenderEffect(null)
-                          } else {
-                              layer.scaleX = 1.0f - (0.05f * smoothProgress)
-                              layer.scaleY = 1.0f - (0.05f * smoothProgress)
-                              if (blurRadius > 1.5f) {
-                                  layer.setRenderEffect(RenderEffect.createBlurEffect(blurRadius, blurRadius, Shader.TileMode.CLAMP))
-                              } else {
-                                  layer.setRenderEffect(null)
-                              }
-                          }
+                      wholeSceneLayer.scaleX = 0.95f + (0.05f * focusFactor)
+                      wholeSceneLayer.scaleY = 0.95f + (0.05f * focusFactor)
+                      wholeSceneLayer.alpha = 0.80f + (0.20f * focusFactor)
+                  }
+
+                  if (abs(blurRadius - lastBlur) > 0.8f) {
+                      lastBlur = blurRadius
+                      if (blurRadius > 1.2f) {
+                          wholeSceneLayer.setRenderEffect(RenderEffect.createBlurEffect(blurRadius, blurRadius, Shader.TileMode.CLAMP))
+                      } else {
+                          wholeSceneLayer.setRenderEffect(null)
                       }
                   }
               }
 
-              private fun rebuildDesktopUI() {
-                  root.removeAllViews()
+              private fun rebuildScene() {
+                  rootFrame.removeAllViews()
 
-                  // 1. 底层壁纸：自动获取你当前手机设置的真实壁纸
-                  val wallpaper = ImageView(this).apply {
+                  // 创建整屏光学载体（壁纸 + 组件 + 图标全在这一个图层里，整体对焦）
+                  wholeSceneLayer = FrameLayout(this).apply {
+                      layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+                  }
+
+                  // 1. 底层壁纸（读取本机壁纸）
+                  val bg = ImageView(this).apply {
                       layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
                       scaleType = ImageView.ScaleType.CENTER_CROP
                       try {
-                          val wm = WallpaperManager.getInstance(this@MainActivity)
-                          setImageDrawable(wm.drawable)
-                      } catch (e: Throwable) {
-                          setBackgroundColor(0xFF1E222A.toInt())
+                          setImageDrawable(WallpaperManager.getInstance(this@MainActivity).drawable)
+                      } catch (e: Exception) {
+                          setBackgroundColor(0xFF1B2A38.toInt())
                       }
                   }
-                  root.addView(wallpaper)
+                  wholeSceneLayer.addView(bg)
 
-                  // 2. 桌面主体
+                  // 2. 桌面内容布局
                   if (isUnfolded) {
-                      buildInner()
+                      buildInnerScene()
                   } else {
-                      buildOuter()
+                      buildOuterScene()
                   }
 
-                  // 3. 顶部微型状态栏（真实时间与电量）
+                  rootFrame.addView(wholeSceneLayer)
+
+                  // 3. 顶部物理状态栏
                   addRealStatusBar()
               }
 
-              private fun buildInner() {
+              // 内屏：双列全景构图
+              private fun buildInnerScene() {
                   val hBox = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
-                      setPadding(dp(22f), dp(44f), dp(22f), dp(85f))
+                      setPadding(dp(24f), dp(44f), dp(24f), dp(85f))
                   }
 
-                  // === 左扇面（挂载物理合焦引擎） ===
-                  leftPanel = LinearLayout(this).apply {
+                  // 左半扇面（Now brief + 天气 + 应用网格）
+                  val leftCol = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.0f).apply {
-                          marginEnd = dp(16f)
-                      }
-
-                      val topWidgets = LinearLayout(this@MainActivity).apply {
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.0f).apply { marginEnd = dp(16f) }
+                      val topW = LinearLayout(this@MainActivity).apply {
                           orientation = LinearLayout.HORIZONTAL
                           layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
                           addView(createBriefWidget())
                           addView(createWeatherWidget())
                       }
-                      addView(topWidgets)
-
-                      // 展示你手机的前 8 个真实应用
-                      addView(createRealAppGrid(4, 0, 8))
-
+                      addView(topW)
+                      addView(createGrid(4, 0, 8))
                       addView(View(this@MainActivity).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f) })
                   }
 
-                  // === 右侧锚点（保持清晰锐利） ===
-                  rightPanel = LinearLayout(this).apply {
+                  // 右半扇面（Status 卡片 + 其余应用）
+                  val rightCol = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.0f).apply {
-                          marginStart = dp(16f)
-                      }
-
-                      val topRow = LinearLayout(this@MainActivity).apply {
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.0f).apply { marginStart = dp(16f) }
+                      val topR = LinearLayout(this@MainActivity).apply {
                           orientation = LinearLayout.HORIZONTAL
                           layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                          val subBox = LinearLayout(this@MainActivity).apply {
+                          val folder = LinearLayout(this@MainActivity).apply {
                               orientation = LinearLayout.HORIZONTAL
                               layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f)
-                              if (myApps.size > 8) addView(createAppView(myApps[8]))
-                              if (myApps.size > 9) addView(createAppView(myApps[9]))
+                              if (apps.size > 8) addView(createAppItem(apps[8]))
+                              if (apps.size > 9) addView(createAppItem(apps[9]))
                           }
-                          addView(subBox)
+                          addView(folder)
                           addView(createStatusWidget())
                       }
-                      addView(topRow)
-
-                      // 展示后续的真实应用
-                      if (myApps.size > 10) {
-                          addView(createRealAppGrid(4, 10, 8))
-                      }
-
+                      addView(topR)
+                      if (apps.size > 10) addView(createGrid(4, 10, 8))
                       addView(View(this@MainActivity).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f) })
                   }
 
-                  hBox.addView(leftPanel)
-                  hBox.addView(rightPanel)
-                  root.addView(hBox)
+                  hBox.addView(leftCol)
+                  hBox.addView(rightCol)
+                  wholeSceneLayer.addView(hBox)
 
-                  // 4. 中缝物理折痕深度立体阴影层（随开合动态淡入淡出）
-                  creaseShadowView = View(this).apply {
-                      layoutParams = FrameLayout.LayoutParams(dp(50f), FrameLayout.LayoutParams.MATCH_PARENT).apply {
-                          gravity = Gravity.CENTER
-                      }
-                      background = GradientDrawable(
-                          GradientDrawable.Orientation.LEFT_RIGHT,
-                          intArrayOf(0x00000000, 0x88000000.toInt(), 0x00000000)
-                      )
-                      alpha = 0f
-                  }
-                  root.addView(creaseShadowView)
-
-                  // 5. 底部悬浮毛玻璃 Dock 栏
-                  val dockWrap = FrameLayout(this).apply {
+                  // 底部中央 Dock
+                  val dockFrame = FrameLayout(this).apply {
                       layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT).apply {
                           gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
                           bottomMargin = dp(18f)
                       }
                   }
-                  dockBarView = createDockBar(6)
-                  dockWrap.addView(dockBarView)
-                  root.addView(dockWrap)
+                  dockWrap = createDock(6)
+                  dockFrame.addView(dockWrap)
+                  wholeSceneLayer.addView(dockFrame)
               }
 
-              private fun buildOuter() {
-                  outerLayer = LinearLayout(this).apply {
+              // 外屏：单列紧凑构图
+              private fun buildOuterScene() {
+                  val vBox = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
                       setPadding(dp(18f), dp(44f), dp(18f), dp(20f))
 
-                      val topWidgets = LinearLayout(this@MainActivity).apply {
+                      val topW = LinearLayout(this@MainActivity).apply {
                           orientation = LinearLayout.HORIZONTAL
                           layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
                           addView(createBriefWidget())
                           addView(createWeatherWidget())
                       }
-                      addView(topWidgets)
-
-                      addView(createRealAppGrid(4, 0, 8))
+                      addView(topW)
+                      addView(createGrid(4, 0, 8))
                       addView(View(this@MainActivity).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f) })
-                      addView(createDockBar(4))
+                      addView(createDock(4))
                   }
-                  root.addView(outerLayer)
+                  wholeSceneLayer.addView(vBox)
               }
 
-              private fun createRealAppGrid(cols: Int, startIndex: Int, count: Int): View {
-                  val grid = GridLayout(this).apply {
+              private fun createBriefWidget(): View {
+                  return LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(0, dp(100f), 1.0f).apply { marginEnd = dp(6f) }
+                      setPadding(dp(14f), dp(14f), dp(14f), dp(14f))
+                      background = GradientDrawable().apply { cornerRadius = dp(22f).toFloat(); setColor(0xCC102434.toInt()) }
+                      val bar = View(this@MainActivity).apply {
+                          layoutParams = LinearLayout.LayoutParams(dp(5f), dp(14f)).apply { bottomMargin = dp(6f) }
+                          background = GradientDrawable().apply { cornerRadius = dp(2.5f).toFloat(); setColor(0xFF00E5FF.toInt()) }
+                      }
+                      val t = TextView(this@MainActivity).apply { text = "Now brief"; textSize = 15f; setTextColor(Color.WHITE); paint.isFakeBoldText = true }
+                      val s = TextView(this@MainActivity).apply { text = "Get today's highlights"; textSize = 11f; setTextColor(0x99FFFFFF.toInt()) }
+                      addView(bar); addView(t); addView(s)
+                  }
+              }
+
+              private fun createWeatherWidget(): View {
+                  return LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(0, dp(100f), 1.0f).apply { marginStart = dp(6f) }
+                      setPadding(dp(14f), dp(14f), dp(14f), dp(14f))
+                      background = GradientDrawable().apply { cornerRadius = dp(22f).toFloat(); setColor(0xCC163B5C.toInt()) }
+                      val dot = View(this@MainActivity).apply {
+                          layoutParams = LinearLayout.LayoutParams(dp(8f), dp(8f)).apply { bottomMargin = dp(6f) }
+                          background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xFFFFCA28.toInt()) }
+                      }
+                      val t = TextView(this@MainActivity).apply { text = "91°"; textSize = 17f; setTextColor(Color.WHITE); paint.isFakeBoldText = true }
+                      val s = TextView(this@MainActivity).apply { text = "Wed, 9 Sep\nSunny"; textSize = 11f; setTextColor(0xAAFFFFFF.toInt()) }
+                      addView(dot); addView(t); addView(s)
+                  }
+              }
+
+              private fun createStatusWidget(): View {
+                  return LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(0, dp(100f), 1.0f).apply { marginStart = dp(8f) }
+                      setPadding(dp(14f), dp(14f), dp(14f), dp(14f))
+                      background = GradientDrawable().apply { cornerRadius = dp(22f).toFloat(); setColor(0xCC1E242C.toInt()) }
+                      val dot = View(this@MainActivity).apply {
+                          layoutParams = LinearLayout.LayoutParams(dp(8f), dp(8f)).apply { bottomMargin = dp(6f) }
+                          background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xFFBA68C8.toInt()) }
+                      }
+                      val t = TextView(this@MainActivity).apply { text = "Status"; textSize = 15f; setTextColor(Color.WHITE); paint.isFakeBoldText = true }
+                      val s = TextView(this@MainActivity).apply { text = "What's your status?"; textSize = 11f; setTextColor(0x99FFFFFF.toInt()) }
+                      addView(dot); addView(t); addView(s)
+                  }
+              }
+
+              private fun createGrid(cols: Int, start: Int, count: Int): View {
+                  val g = GridLayout(this).apply {
                       columnCount = cols
-                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                          topMargin = dp(18f)
-                      }
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(18f) }
                   }
-
-                  val maxEnd = minOf(startIndex + count, myApps.size)
-                  for (i in startIndex until maxEnd) {
-                      val app = myApps[i]
-                      val appView = createAppView(app)
-                      appView.layoutParams = GridLayout.LayoutParams().apply {
-                          width = 0
-                          columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
-                          bottomMargin = dp(16f)
-                      }
-                      grid.addView(appView)
+                  val end = minOf(start + count, apps.size)
+                  for (i in start until end) {
+                      val v = createAppItem(apps[i])
+                      v.layoutParams = GridLayout.LayoutParams().apply { width = 0; columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f); bottomMargin = dp(16f) }
+                      g.addView(v)
                   }
-                  return grid
+                  return g
               }
 
-              private fun createAppView(app: RealAppItem): View {
-                  val layout = LinearLayout(this).apply {
+              private fun createAppItem(app: RealApp): View {
+                  return LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       gravity = Gravity.CENTER
                       setOnClickListener {
                           animate().scaleX(0.88f).scaleY(0.88f).setDuration(80).withEndAction {
                               animate().scaleX(1.0f).scaleY(1.0f).setDuration(100).start()
-                              val launchIntent = packageManager.getLaunchIntentForPackage(app.pkg)
-                              launchIntent?.let { startActivity(it) }
+                              packageManager.getLaunchIntentForPackage(app.pkg)?.let { startActivity(it) }
                           }.start()
                       }
+                      val img = ImageView(this@MainActivity).apply {
+                          layoutParams = LinearLayout.LayoutParams(dp(54f), dp(54f))
+                          setImageDrawable(app.icon)
+                      }
+                      val tv = TextView(this@MainActivity).apply {
+                          text = app.name
+                          textSize = 11f
+                          setTextColor(0xEEFFFFFF.toInt())
+                          maxLines = 1
+                          setPadding(0, dp(4f), 0, 0)
+                      }
+                      addView(img); addView(tv)
                   }
-
-                  val iconImg = ImageView(this).apply {
-                      layoutParams = LinearLayout.LayoutParams(dp(54f), dp(54f))
-                      setImageDrawable(app.icon)
-                  }
-
-                  val nameTv = TextView(this).apply {
-                      text = app.label
-                      textSize = 11f
-                      setTextColor(0xEEFFFFFF.toInt())
-                      maxLines = 1
-                      setPadding(0, dp(4f), 0, 0)
-                  }
-
-                  layout.addView(iconImg)
-                  layout.addView(nameTv)
-                  return layout
               }
 
-              private fun createDockBar(count: Int): View {
-                  val dockWrap = LinearLayout(this).apply {
+              private fun createDock(count: Int): View {
+                  val dock = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER
-                      layoutParams = LinearLayout.LayoutParams(
-                          if (isUnfolded) dp(330f) else LinearLayout.LayoutParams.MATCH_PARENT,
-                          dp(68f)
-                      )
-                      background = GradientDrawable().apply {
-                          cornerRadius = dp(34f).toFloat()
-                          setColor(0x40FFFFFF.toInt())
-                      }
+                      layoutParams = LinearLayout.LayoutParams(if (isUnfolded) dp(330f) else LinearLayout.LayoutParams.MATCH_PARENT, dp(68f))
+                      background = GradientDrawable().apply { cornerRadius = dp(34f).toFloat(); setColor(0x40FFFFFF.toInt()) }
                   }
-
-                  val dockApps = myApps.take(count)
+                  val dockApps = apps.take(count)
                   for (app in dockApps) {
                       val icon = ImageView(this).apply {
-                          layoutParams = LinearLayout.LayoutParams(dp(48f), dp(48f)).apply {
-                              leftMargin = dp(8f)
-                              rightMargin = dp(8f)
-                          }
+                          layoutParams = LinearLayout.LayoutParams(dp(48f), dp(48f)).apply { leftMargin = dp(7f); rightMargin = dp(7f) }
                           setImageDrawable(app.icon)
-                          setOnClickListener {
-                              animate().scaleX(0.88f).scaleY(0.88f).setDuration(80).withEndAction {
-                                  animate().scaleX(1.0f).scaleY(1.0f).setDuration(100).start()
-                                  val launchIntent = packageManager.getLaunchIntentForPackage(app.pkg)
-                                  launchIntent?.let { startActivity(it) }
-                              }.start()
-                          }
+                          setOnClickListener { packageManager.getLaunchIntentForPackage(app.pkg)?.let { startActivity(it) } }
                       }
-                      dockWrap.addView(icon)
+                      dock.addView(icon)
                   }
-                  return dockWrap
+                  return dock
               }
 
               private fun addRealStatusBar() {
                   val bar = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT).apply {
-                          topMargin = dp(12f)
-                          leftMargin = dp(24f)
-                          rightMargin = dp(24f)
+                          topMargin = dp(12f); leftMargin = dp(24f); rightMargin = dp(24f)
                       }
                   }
                   val timeTv = TextView(this).apply {
                       text = SimpleDateFormat("H:mm", Locale.getDefault()).format(Date())
-                      textSize = 13f
-                      setTextColor(0xDDFFFFFF.toInt())
-                      paint.isFakeBoldText = true
+                      textSize = 13f; setTextColor(0xDDFFFFFF.toInt()); paint.isFakeBoldText = true
                   }
                   val spacer = View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1.0f) }
                   val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-                  val battery = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                  val bat = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
                   val rightInfo = TextView(this).apply {
-                      text = "5G  $battery%"
-                      textSize = 13f
-                      setTextColor(0xDDFFFFFF.toInt())
-                      paint.isFakeBoldText = true
+                      text = "5G  $bat%"; textSize = 13f; setTextColor(0xDDFFFFFF.toInt()); paint.isFakeBoldText = true
                   }
-                  bar.addView(timeTv)
-                  bar.addView(spacer)
-                  bar.addView(rightInfo)
-                  root.addView(bar)
-              }
-
-              private fun createBriefWidget(): View {
-                  val card = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      layoutParams = LinearLayout.LayoutParams(0, dp(100f), 1.0f).apply { marginEnd = dp(8f) }
-                      setPadding(dp(14f), dp(14f), dp(14f), dp(14f))
-                      background = GradientDrawable().apply { cornerRadius = dp(22f).toFloat(); setColor(0xCC102434.toInt()) }
-                  }
-                  val bar = View(this).apply {
-                      layoutParams = LinearLayout.LayoutParams(dp(6f), dp(14f)).apply { bottomMargin = dp(8f) }
-                      background = GradientDrawable().apply { cornerRadius = dp(3f).toFloat(); setColor(0xFF00E5FF.toInt()) }
-                  }
-                  val t = TextView(this).apply { text = "Now brief"; textSize = 15f; setTextColor(Color.WHITE); paint.isFakeBoldText = true }
-                  val s = TextView(this).apply { text = "Get today's highlights"; textSize = 11f; setTextColor(0x99FFFFFF.toInt()) }
-                  card.addView(bar)
-                  card.addView(t)
-                  card.addView(s)
-                  return card
-              }
-
-              private fun createWeatherWidget(): View {
-                  val card = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      layoutParams = LinearLayout.LayoutParams(0, dp(100f), 1.0f).apply { marginStart = dp(8f) }
-                      setPadding(dp(14f), dp(14f), dp(14f), dp(14f))
-                      background = GradientDrawable().apply { cornerRadius = dp(22f).toFloat(); setColor(0xCC163B5C.toInt()) }
-                  }
-                  val dot = View(this).apply {
-                      layoutParams = LinearLayout.LayoutParams(dp(10f), dp(10f)).apply { bottomMargin = dp(8f) }
-                      background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xFFFFCA28.toInt()) }
-                  }
-                  val t = TextView(this).apply { text = SimpleDateFormat("EEE, d MMM", Locale.ENGLISH).format(Date()); textSize = 15f; setTextColor(Color.WHITE); paint.isFakeBoldText = true }
-                  val s = TextView(this).apply { text = "Sunny"; textSize = 11f; setTextColor(0xAAFFFFFF.toInt()) }
-                  card.addView(dot)
-                  card.addView(t)
-                  card.addView(s)
-                  return card
-              }
-
-              private fun createStatusWidget(): View {
-                  val card = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      layoutParams = LinearLayout.LayoutParams(0, dp(100f), 1.0f).apply { marginStart = dp(10f) }
-                      setPadding(dp(14f), dp(14f), dp(14f), dp(14f))
-                      background = GradientDrawable().apply { cornerRadius = dp(22f).toFloat(); setColor(0xCC1E242C.toInt()) }
-                  }
-                  val dot = View(this).apply {
-                      layoutParams = LinearLayout.LayoutParams(dp(10f), dp(10f)).apply { bottomMargin = dp(8f) }
-                      background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xFFBA68C8.toInt()) }
-                  }
-                  val t = TextView(this).apply { text = "Status"; textSize = 15f; setTextColor(Color.WHITE); paint.isFakeBoldText = true }
-                  val s = TextView(this).apply { text = "All systems normal"; textSize = 11f; setTextColor(0x99FFFFFF.toInt()) }
-                  card.addView(dot)
-                  card.addView(t)
-                  card.addView(s)
-                  return card
+                  bar.addView(timeTv); bar.addView(spacer); bar.addView(rightInfo)
+                  rootFrame.addView(bar)
               }
           }
           EOF
@@ -641,6 +552,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Fold8-DeepOptical-APK
+          name: Fold8-CinemaFocus-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
